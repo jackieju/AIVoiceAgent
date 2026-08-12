@@ -6,6 +6,7 @@ public enum VoiceAgent {
 
 public protocol AudioIO: AnyObject {
     var onBuffer: (([Float], Double) -> Void)? { get set }
+    var sampleRate: Double { get }
     func start() throws
     func stop()
 }
