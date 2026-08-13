@@ -51,7 +51,24 @@ requestPermissions { granted in
     let vad = EnergyVad()
     let llm = makeProvider(from: config)
 
-    let session = VoiceSession(audio: audio, vad: vad, stt: stt, tts: tts, llm: llm)
+    var nvpClient: NVPClient?
+    if config.nvp?.enabled ?? true {
+        let defaultBinary = "~/Desktop/ju/projects/AIAgentLocalMemory/packages/server/dist/nvp-server"
+        let defaultDB = "~/Library/Application Support/AIVoiceAgent/voice-memory.db"
+        let rawDB = config.nvp?.dbPath ?? defaultDB
+        let nvpConfig = NVPClient.Config(
+            binaryPath: config.nvp?.binaryPath ?? defaultBinary,
+            dbPath: (rawDB as NSString).expandingTildeInPath,
+            projectId: config.nvp?.projectId ?? "voice"
+        )
+        let dbDir = (nvpConfig.dbPath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dbDir, withIntermediateDirectories: true)
+        let client = NVPClient(config: nvpConfig)
+        client.start()
+        nvpClient = client.isHealthy ? client : nil
+    }
+
+    let session = VoiceSession(audio: audio, vad: vad, stt: stt, tts: tts, llm: llm, nvp: nvpClient)
     session.onState = { state in
         let label: String
         switch state {

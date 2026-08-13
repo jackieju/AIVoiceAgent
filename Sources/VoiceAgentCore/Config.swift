@@ -25,11 +25,19 @@ public struct VoiceConfig: Codable {
     public var sttLocale: String?
 }
 
+public struct NVPConfig: Codable {
+    public var enabled: Bool?
+    public var binaryPath: String?
+    public var dbPath: String?
+    public var projectId: String?
+}
+
 public struct AgentConfig: Codable {
     public var model: String
     public var provider: ProviderConfig
     public var systemPrompt: String?
     public var voice: VoiceConfig?
+    public var nvp: NVPConfig?
 
     public static func load(from path: String) throws -> AgentConfig {
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)

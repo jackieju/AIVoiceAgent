@@ -16,6 +16,7 @@ public final class VoiceSession {
     private let stt: Stt
     private let tts: Tts
     private let llm: LLMProvider
+    private let nvp: NVPClient?
 
     public var onState: ((VoiceState) -> Void)?
     public var onUserText: ((String) -> Void)?
@@ -30,14 +31,21 @@ public final class VoiceSession {
     private var pendingReply = ""
     private var replyGeneration = 0
 
+    private let sessionId = "voice-\(Int(Date().timeIntervalSince1970))"
+    private let compressionSwitchThresholdChars = 16_000
+    private let contextWindowTokens = 128_000
+    private let budgetRatio = 0.5
+    private let recentFullTextTurns = 6
+
     private let sentenceEnders: Set<Character> = ["。", "！", "？", ".", "!", "?", "\n"]
 
-    public init(audio: AudioIO, vad: Vad, stt: Stt, tts: Tts, llm: LLMProvider) {
+    public init(audio: AudioIO, vad: Vad, stt: Stt, tts: Tts, llm: LLMProvider, nvp: NVPClient? = nil) {
         self.audio = audio
         self.vad = vad
         self.stt = stt
         self.tts = tts
         self.llm = llm
+        self.nvp = nvp
         wire()
     }
 
@@ -92,9 +100,11 @@ public final class VoiceSession {
         replyGeneration += 1
         let generation = replyGeneration
 
+        let messagesToSend = buildOutgoingMessages()
+
         var accumulated = ""
         llm.stream(
-            messages: history,
+            messages: messagesToSend,
             onDelta: { [weak self] delta in
                 guard let self = self, generation == self.replyGeneration else { return }
                 accumulated += delta
@@ -107,6 +117,10 @@ public final class VoiceSession {
                 if !accumulated.isEmpty {
                     self.history.append(ChatMessage(role: .assistant, text: accumulated))
                     self.onAgentText?(accumulated)
+                    self.nvp?.ingest(sessionId: self.sessionId, turn: [
+                        (role: "user", content: text),
+                        (role: "assistant", content: accumulated),
+                    ])
                 }
             },
             onError: { [weak self] error in
@@ -114,6 +128,30 @@ public final class VoiceSession {
                 self.speakChunk("抱歉，出错了：\(error)", generation: generation)
             }
         )
+    }
+
+    /// 低于阈值直接发原始历史（新会话还没压缩内容，调 NVP 纯属浪费）；
+    /// 超阈值才尝试 renderContext，任何失败/超时降级回原始历史。
+    private func buildOutgoingMessages() -> [ChatMessage] {
+        let totalChars = history.reduce(0) { $0 + $1.text.count }
+        guard totalChars >= compressionSwitchThresholdChars, let nvp = nvp else {
+            return history
+        }
+        guard let rendered = nvp.renderContext(
+            sessionId: sessionId,
+            contextWindowTokens: contextWindowTokens,
+            budgetRatio: budgetRatio,
+            recentFullTextTurns: recentFullTextTurns
+        ), !rendered.isEmpty else {
+            return history
+        }
+        return rendered.compactMap { m in
+            switch m.role {
+            case "user": return ChatMessage(role: .user, text: m.content)
+            case "assistant": return ChatMessage(role: .assistant, text: m.content)
+            default: return nil
+            }
+        }
     }
 
     private func flushSentences(generation: Int) {
