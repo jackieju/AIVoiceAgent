@@ -1,0 +1,19 @@
+{
+  "model": "claude-opus-4-8",
+  "provider": {
+    "type": "anthropic",
+    "baseURL": "http://localhost:6655/anthropic",
+    "apiKey": "{env:AIVOICEAGENT_API_KEY}"
+  },
+  "systemPrompt": "你是一个语音助手。用户在用语音跟你对话，你的回复会被朗读出来。所以：回答要简短口语化，像聊天一样；不要用 markdown、代码块、列表符号、表情符号；不要说“如下所示”“见下方”这类指向屏幕的话。",
+  "voice": {
+    "ttsVoice": "zh-CN",
+    "sttLocale": "zh-CN"
+  },
+  "nvp": {
+    "enabled": true,
+    "binaryPath": "~/Desktop/ju/projects/AIAgentLocalMemory/packages/server/dist/nvp-server",
+    "dbPath": "~/Library/Application Support/AIVoiceAgent/voice-memory.db",
+    "projectId": "voice"
+  }
+}
