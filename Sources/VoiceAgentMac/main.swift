@@ -1,25 +1,346 @@
 import Foundation
+import AppKit
 import AVFoundation
 import Speech
 import VoiceAgentCore
 
-func requestPermissions(_ completion: @escaping (Bool) -> Void) {
-    let sem = DispatchSemaphore(value: 0)
-    var micOK = false
-    AVCaptureDevice.requestAccess(for: .audio) { micOK = $0; sem.signal() }
-    sem.wait()
-    guard micOK else {
-        print("❌ 麦克风权限被拒绝。系统设置 > 隐私与安全性 > 麦克风")
-        completion(false); return
-    }
-    MacStt.requestAuthorization { sttOK in
-        guard sttOK else {
-            print("❌ 语音识别权限被拒绝。系统设置 > 隐私与安全性 > 语音识别")
-            completion(false); return
+// MARK: - Permission helpers
+
+enum PermissionResult {
+    case granted
+    case micDenied
+    case sttDenied
+}
+
+func requestPermissions(_ completion: @escaping (PermissionResult) -> Void) {
+    AVCaptureDevice.requestAccess(for: .audio) { micOK in
+        guard micOK else {
+            DispatchQueue.main.async { completion(.micDenied) }
+            return
         }
-        completion(true)
+        MacStt.requestAuthorization { sttOK in
+            DispatchQueue.main.async {
+                completion(sttOK ? .granted : .sttDenied)
+            }
+        }
     }
 }
+
+// MARK: - AppDelegate
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+
+    private var window: NSWindow!
+    private var statusLabel: NSTextField!
+    private var textView: NSTextView!
+    private var scrollView: NSScrollView!
+    private var toggleButton: NSButton!
+
+    private var statusItem: NSStatusItem!
+    private var statusMenu: NSMenu!
+    private var toggleMenuItem: NSMenuItem!
+    private var showHideMenuItem: NSMenuItem!
+
+    private var session: VoiceSession?
+    private var nvpClient: NVPClient?
+    private var configPath: String = "~/.config/aivoiceagent/config.json"
+
+    private var isRunning: Bool = false
+    private var currentState: VoiceState = .idle
+
+    // MARK: Lifecycle
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        buildMainWindow()
+        buildStatusItem()
+        updateStateUI(.idle)
+
+        let args = CommandLine.arguments
+        if let idx = args.firstIndex(of: "--config"), idx + 1 < args.count {
+            configPath = args[idx + 1]
+        }
+
+        let config: AgentConfig
+        do {
+            config = try AgentConfig.load(from: configPath)
+        } catch {
+            showFatalAlert(
+                title: "配置加载失败",
+                message: "错误：\(error)\n\n预期配置路径：\(configPath)\n可通过 --config <路径> 指定其它文件。"
+            )
+            return
+        }
+
+        requestPermissions { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .micDenied:
+                self.showFatalAlert(
+                    title: "麦克风权限被拒绝",
+                    message: "请前往 系统设置 > 隐私与安全性 > 麦克风，允许 AI Voice Agent 访问麦克风后重新打开应用。"
+                )
+            case .sttDenied:
+                self.showFatalAlert(
+                    title: "语音识别权限被拒绝",
+                    message: "请前往 系统设置 > 隐私与安全性 > 语音识别，允许 AI Voice Agent 使用语音识别后重新打开应用。"
+                )
+            case .granted:
+                self.setupSession(with: config)
+            }
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false
+    }
+
+    // MARK: Window construction
+
+    private func buildMainWindow() {
+        let rect = NSRect(x: 0, y: 0, width: 520, height: 640)
+        window = NSWindow(
+            contentRect: rect,
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "AI Voice Agent"
+        window.delegate = self
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        let content = NSView(frame: rect)
+        content.autoresizingMask = [.width, .height]
+
+        statusLabel = NSTextField(labelWithString: "闲置")
+        statusLabel.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
+        statusLabel.alignment = .center
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(statusLabel)
+
+        scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .bezelBorder
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        let tv = NSTextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.isRichText = false
+        tv.font = NSFont.systemFont(ofSize: 14)
+        tv.textContainerInset = NSSize(width: 8, height: 8)
+        tv.autoresizingMask = [.width]
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        tv.textContainer?.widthTracksTextView = true
+        textView = tv
+        scrollView.documentView = tv
+        content.addSubview(scrollView)
+
+        toggleButton = NSButton(title: "开始聆听", target: self, action: #selector(handleToggle))
+        toggleButton.bezelStyle = .rounded
+        toggleButton.controlSize = .large
+        toggleButton.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(toggleButton)
+
+        NSLayoutConstraint.activate([
+            statusLabel.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            statusLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+
+            scrollView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 16),
+            scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -80),
+
+            toggleButton.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 16),
+            toggleButton.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            toggleButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
+        ])
+
+        window.contentView = content
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: Status bar
+
+    private func buildStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.title = "⏸️"
+
+        let menu = NSMenu()
+        showHideMenuItem = NSMenuItem(title: "显示/隐藏窗口", action: #selector(handleToggleWindow), keyEquivalent: "w")
+        showHideMenuItem.target = self
+        menu.addItem(showHideMenuItem)
+
+        toggleMenuItem = NSMenuItem(title: "开始聆听", action: #selector(handleToggle), keyEquivalent: "s")
+        toggleMenuItem.target = self
+        menu.addItem(toggleMenuItem)
+
+        menu.addItem(.separator())
+
+        let quitItem = NSMenuItem(title: "退出", action: #selector(handleQuit), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        statusItem.menu = menu
+        statusMenu = menu
+    }
+
+    // MARK: Session setup
+
+    private func setupSession(with config: AgentConfig) {
+        let audio = MacAudioIO()
+        let tts = MacTts(audio: audio, voiceLanguage: config.voice?.ttsVoice)
+        let stt = MacStt(locale: config.voice?.sttLocale ?? "zh-CN")
+        let vad = EnergyVad()
+        let llm = makeProvider(from: config)
+
+        var nvpClient: NVPClient?
+        if config.nvp?.enabled ?? true {
+            let defaultBinary = "~/Desktop/ju/projects/AIAgentLocalMemory/packages/server/dist/nvp-server"
+            let defaultDB = "~/Library/Application Support/AIVoiceAgent/voice-memory.db"
+            let rawDB = config.nvp?.dbPath ?? defaultDB
+            let nvpConfig = NVPClient.Config(
+                binaryPath: config.nvp?.binaryPath ?? defaultBinary,
+                dbPath: (rawDB as NSString).expandingTildeInPath,
+                projectId: config.nvp?.projectId ?? "voice"
+            )
+            let dbDir = (nvpConfig.dbPath as NSString).deletingLastPathComponent
+            try? FileManager.default.createDirectory(atPath: dbDir, withIntermediateDirectories: true)
+            let client = NVPClient(config: nvpConfig)
+            client.start()
+            nvpClient = client.isHealthy ? client : nil
+        }
+        self.nvpClient = nvpClient
+
+        let session = VoiceSession(audio: audio, vad: vad, stt: stt, tts: tts, llm: llm, nvp: nvpClient)
+        session.onState = { [weak self] state in
+            DispatchQueue.main.async { self?.updateStateUI(state) }
+        }
+        session.onUserText = { [weak self] text in
+            DispatchQueue.main.async { self?.appendLine("👤 你：\(text)") }
+        }
+        session.onAgentText = { [weak self] text in
+            DispatchQueue.main.async { self?.appendLine("🤖 助手：\(text)") }
+        }
+        self.session = session
+
+        appendLine("=== AI Voice Agent v\(VoiceAgent.version) ===")
+        appendLine("model=\(config.model)  provider=\(config.provider.type)")
+        appendLine("开始说话，停顿后自动提交。说话可打断助手。\n")
+
+        startListening()
+    }
+
+    // MARK: UI updates
+
+    private func updateStateUI(_ state: VoiceState) {
+        currentState = state
+        let label: String
+        let icon: String
+        switch state {
+        case .idle:      label = "闲置";        icon = "⏸️"
+        case .listening: label = "🎙️ 聆听中…"; icon = "🎙️"
+        case .thinking:  label = "🤔 思考中…"; icon = "🤔"
+        case .speaking:  label = "🔊 说话中…"; icon = "🔊"
+        }
+        statusLabel?.stringValue = label
+        statusItem?.button?.title = isRunning ? icon : "⏸️"
+    }
+
+    private func appendLine(_ line: String) {
+        guard let tv = textView else { return }
+        let toAppend = (tv.string.isEmpty ? "" : "\n") + line
+        let ts = tv.textStorage
+        ts?.append(NSAttributedString(
+            string: toAppend,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 14),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        ))
+        tv.scrollToEndOfDocument(nil)
+    }
+
+    // MARK: Actions
+
+    @objc private func handleToggle() {
+        if isRunning {
+            stopListening()
+        } else {
+            startListening()
+        }
+    }
+
+    private func startListening() {
+        guard let session = session else { return }
+        guard !isRunning else { return }
+        do {
+            try session.start()
+            isRunning = true
+            toggleButton?.title = "停止聆听"
+            toggleMenuItem?.title = "停止聆听"
+            updateStateUI(currentState)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "启动失败"
+            alert.informativeText = "\(error)"
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "好")
+            alert.runModal()
+        }
+    }
+
+    private func stopListening() {
+        guard let session = session else { return }
+        guard isRunning else { return }
+        session.stop()
+        isRunning = false
+        toggleButton?.title = "开始聆听"
+        toggleMenuItem?.title = "开始聆听"
+        updateStateUI(.idle)
+    }
+
+    @objc private func handleToggleWindow() {
+        guard let window = window else { return }
+        if window.isVisible {
+            window.orderOut(nil)
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    @objc private func handleQuit() {
+        NSApp.terminate(nil)
+    }
+
+    // MARK: NSWindowDelegate
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
+
+    // MARK: Alerts
+
+    private func showFatalAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "退出")
+        alert.runModal()
+        NSApp.terminate(nil)
+    }
+}
+
+// MARK: - Entry point
 
 let args = CommandLine.arguments
 
@@ -27,70 +348,11 @@ if args.contains("--probe") {
     let probe = AECProbe()
     DispatchQueue.global().async { probe.run() }
     RunLoop.main.run()
+    exit(0)
 }
 
-let configPath = args.firstIndex(of: "--config").flatMap { idx -> String? in
-    idx + 1 < args.count ? args[idx + 1] : nil
-} ?? "~/.config/aivoiceagent/config.json"
-
-let config: AgentConfig
-do {
-    config = try AgentConfig.load(from: configPath)
-} catch {
-    print("❌ 配置加载失败: \(error)")
-    print("   用 --config <路径> 指定，或创建 \(configPath)")
-    exit(1)
-}
-
-requestPermissions { granted in
-    guard granted else { exit(1) }
-
-    let audio = MacAudioIO()
-    let tts = MacTts(audio: audio, voiceLanguage: config.voice?.ttsVoice)
-    let stt = MacStt(locale: config.voice?.sttLocale ?? "zh-CN")
-    let vad = EnergyVad()
-    let llm = makeProvider(from: config)
-
-    var nvpClient: NVPClient?
-    if config.nvp?.enabled ?? true {
-        let defaultBinary = "~/Desktop/ju/projects/AIAgentLocalMemory/packages/server/dist/nvp-server"
-        let defaultDB = "~/Library/Application Support/AIVoiceAgent/voice-memory.db"
-        let rawDB = config.nvp?.dbPath ?? defaultDB
-        let nvpConfig = NVPClient.Config(
-            binaryPath: config.nvp?.binaryPath ?? defaultBinary,
-            dbPath: (rawDB as NSString).expandingTildeInPath,
-            projectId: config.nvp?.projectId ?? "voice"
-        )
-        let dbDir = (nvpConfig.dbPath as NSString).deletingLastPathComponent
-        try? FileManager.default.createDirectory(atPath: dbDir, withIntermediateDirectories: true)
-        let client = NVPClient(config: nvpConfig)
-        client.start()
-        nvpClient = client.isHealthy ? client : nil
-    }
-
-    let session = VoiceSession(audio: audio, vad: vad, stt: stt, tts: tts, llm: llm, nvp: nvpClient)
-    session.onState = { state in
-        let label: String
-        switch state {
-        case .idle: label = "闲置"
-        case .listening: label = "🎙️  聆听中…"
-        case .thinking: label = "🤔 思考中…"
-        case .speaking: label = "🔊 说话中…"
-        }
-        print("[\(label)]")
-    }
-    session.onUserText = { print("👤 你: \($0)") }
-    session.onAgentText = { print("🤖 助手: \($0)") }
-
-    do {
-        try session.start()
-        print("=== AI Voice Agent v\(VoiceAgent.version) ===")
-        print("model=\(config.model) provider=\(config.provider.type)")
-        print("开始说话，停顿后自动提交。说话可打断助手。Ctrl+C 退出。\n")
-    } catch {
-        print("❌ 启动失败: \(error)")
-        exit(1)
-    }
-}
-
-RunLoop.main.run()
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.setActivationPolicy(.regular)
+app.run()

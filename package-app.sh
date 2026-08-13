@@ -1,6 +1,8 @@
 #!/bin/bash
-# 把 VoiceAgentMac 打包成可双击的 macOS .app
-# 关键：Info.plist 必须声明麦克风 + 语音识别用途，否则 macOS 直接 crash 而非弹权限框
+# 把 VoiceAgentMac 打包成可双击的 macOS GUI .app
+# 关键：
+#   1. Info.plist 必须声明麦克风 + 语音识别用途，否则 macOS 直接 crash 而非弹权限框
+#   2. 二进制直接作为 bundle 入口（GUI app 自管窗口），不再用 osascript 弹 Terminal —— 这样 TCC 权限归属 app 自己
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,22 +24,8 @@ echo "==> 清理并重建 bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-# 真正的可执行文件放进 bundle
-cp "$BIN_SRC" "$APP/Contents/MacOS/VoiceAgentMac-bin"
-
-# 双击入口：在 Terminal.app 打开，让命令行式 print 输出可见
-cat > "$APP/Contents/MacOS/$APP_NAME" <<'LAUNCHER'
-#!/bin/bash
-DIR="$(cd "$(dirname "$0")" && pwd)"
-BIN="$DIR/VoiceAgentMac-bin"
-# 在 Terminal 里运行真正的二进制，这样能看到聆听/思考/说话状态和对话文本
-osascript <<OSA
-tell application "Terminal"
-    activate
-    do script "'$BIN'"
-end tell
-OSA
-LAUNCHER
+# 真正的可执行文件直接作为 bundle 入口（GUI app 自管窗口）
+cp "$BIN_SRC" "$APP/Contents/MacOS/$APP_NAME"
 chmod +x "$APP/Contents/MacOS/$APP_NAME"
 
 # Info.plist —— 用 defaults/PlistBuddy 避免 XML 手写出错
