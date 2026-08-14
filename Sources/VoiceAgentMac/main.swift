@@ -40,9 +40,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusMenu: NSMenu!
     private var toggleMenuItem: NSMenuItem!
     private var showHideMenuItem: NSMenuItem!
+    private var toolsWindowController: ToolsWindowController?
 
     private var session: VoiceSession?
     private var nvpClient: NVPClient?
+    private var registry: ToolRegistry?
+    private var loadedConfig: AgentConfig?
     private var configPath: String = "~/.config/aivoiceagent/config.json"
 
     private var isRunning: Bool = false
@@ -181,6 +184,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         toggleMenuItem.target = self
         menu.addItem(toggleMenuItem)
 
+        let toolsMenuItem = NSMenuItem(title: "工具与 MCP…", action: #selector(handleShowTools), keyEquivalent: "t")
+        toolsMenuItem.target = self
+        menu.addItem(toolsMenuItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "退出", action: #selector(handleQuit), keyEquivalent: "q")
@@ -224,6 +231,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.nvpClient = nvpClient
 
         let registry = ToolRegistry(makeBuiltinTools() + makeScreenTools())
+        self.registry = registry
+        self.loadedConfig = config
         registry.setAuthorizer { [weak self] toolName, description in
             await self?.requestToolAuthorization(toolName: toolName, description: description) ?? false
         }
@@ -349,6 +358,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    @objc private func handleShowTools() {
+        let controller: ToolsWindowController
+        if let existing = toolsWindowController {
+            existing.update(registry: registry, config: loadedConfig)
+            controller = existing
+        } else {
+            let created = ToolsWindowController(registry: registry, config: loadedConfig)
+            toolsWindowController = created
+            controller = created
+        }
+        controller.show()
     }
 
     @objc private func handleQuit() {
