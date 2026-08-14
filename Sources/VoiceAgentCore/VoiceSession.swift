@@ -42,6 +42,10 @@ public final class VoiceSession {
 
     private let sentenceEnders: Set<Character> = ["。", "！", "？", ".", "!", "?", "\n"]
 
+    /// Engine/player/STT control + all `state` writes hop here; never call
+    /// AVAudioPlayerNode.stop() on the audio tap thread — it deadlock-traps.
+    private let controlQueue = DispatchQueue(label: "voiceagent.session.control")
+
     public init(audio: AudioIO, vad: Vad, stt: Stt, tts: Tts, llm: LLMProvider, registry: ToolRegistry = ToolRegistry(), system: String? = nil, maxRounds: Int = 5, nvp: NVPClient? = nil) {
         self.audio = audio
         self.vad = vad
@@ -55,13 +59,15 @@ public final class VoiceSession {
 
     public func start() throws {
         try audio.start()
-        state = .listening
+        controlQueue.async { self.state = .listening }
     }
 
     public func stop() {
-        audio.stop()
-        tts.stopImmediately()
-        state = .idle
+        controlQueue.async {
+            self.audio.stop()
+            self.tts.stopImmediately()
+            self.state = .idle
+        }
     }
 
     private func wire() {
@@ -82,27 +88,33 @@ public final class VoiceSession {
 
         stt.onFinal = { [weak self] text in
             guard let self = self else { return }
-            vaLog("STT final: \(text)")
-            self.latestPartial = ""
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-            self.handleUserUtterance(trimmed)
+            self.controlQueue.async {
+                vaLog("STT final: \(text)")
+                self.latestPartial = ""
+                guard !trimmed.isEmpty else { return }
+                self.handleUserUtterance(trimmed)
+            }
         }
 
         vad.onSpeechStart = { [weak self] in
             guard let self = self else { return }
-            vaLog("VAD speechStart state=\(self.state.rawValue)")
-            if self.state == .speaking {
-                self.bargeIn()
-            } else if self.state == .listening {
-                self.stt.start()
+            self.controlQueue.async {
+                vaLog("VAD speechStart state=\(self.state.rawValue)")
+                if self.state == .speaking {
+                    self.bargeIn()
+                } else if self.state == .listening {
+                    self.stt.start()
+                }
             }
         }
 
         vad.onSpeechEnd = { [weak self] in
             guard let self = self else { return }
-            vaLog("VAD speechEnd state=\(self.state.rawValue)")
-            if self.stt.isActive { self.stt.finish() }
+            self.controlQueue.async {
+                vaLog("VAD speechEnd state=\(self.state.rawValue)")
+                if self.stt.isActive { self.stt.finish() }
+            }
         }
     }
 
@@ -125,16 +137,22 @@ public final class VoiceSession {
                 history: messagesToSend,
                 isCurrent: { [weak self] in self?.replyGeneration == generation },
                 onTextDelta: { [weak self] delta in
-                    guard let self = self, generation == self.replyGeneration else { return }
-                    accumulatedText += delta
-                    self.pendingReply += delta
-                    self.flushSentences(generation: generation)
+                    guard let self = self else { return }
+                    self.controlQueue.async {
+                        guard generation == self.replyGeneration else { return }
+                        accumulatedText += delta
+                        self.pendingReply += delta
+                        self.flushSentences(generation: generation)
+                    }
                 },
                 onToolStart: { [weak self] name in
-                    guard let self = self, generation == self.replyGeneration else { return }
-                    self.flushRemainder(generation: generation)
-                    self.state = .working
-                    self.onToolActivity?(name)
+                    guard let self = self else { return }
+                    self.controlQueue.async {
+                        guard generation == self.replyGeneration else { return }
+                        self.flushRemainder(generation: generation)
+                        self.state = .working
+                        self.onToolActivity?(name)
+                    }
                 },
                 onAssistantMessage: { msg in
                     newMessages.append(msg)
@@ -143,23 +161,26 @@ public final class VoiceSession {
                     newMessages.append(msg)
                 },
                 onDone: { [weak self] reason in
-                    guard let self = self, generation == self.replyGeneration else { return }
-                    self.flushRemainder(generation: generation)
-                    self.history.append(contentsOf: newMessages)
-                    if !accumulatedText.isEmpty {
-                        self.onAgentText?(accumulatedText)
-                    }
-                    switch reason {
-                    case .error(let error):
-                        self.speakChunk("抱歉，出错了：\(error)", generation: generation)
-                    default:
-                        break
-                    }
-                    if !accumulatedText.isEmpty {
-                        self.nvp?.ingest(sessionId: self.sessionId, turn: [
-                            (role: "user", content: text),
-                            (role: "assistant", content: accumulatedText),
-                        ])
+                    guard let self = self else { return }
+                    self.controlQueue.async {
+                        guard generation == self.replyGeneration else { return }
+                        self.flushRemainder(generation: generation)
+                        self.history.append(contentsOf: newMessages)
+                        if !accumulatedText.isEmpty {
+                            self.onAgentText?(accumulatedText)
+                        }
+                        switch reason {
+                        case .error(let error):
+                            self.speakChunk("抱歉，出错了：\(error)", generation: generation)
+                        default:
+                            break
+                        }
+                        if !accumulatedText.isEmpty {
+                            self.nvp?.ingest(sessionId: self.sessionId, turn: [
+                                (role: "user", content: text),
+                                (role: "assistant", content: accumulatedText),
+                            ])
+                        }
                     }
                 }
             )
