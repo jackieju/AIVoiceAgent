@@ -65,20 +65,24 @@ public final class VoiceSession {
     }
 
     private func wire() {
+        var bufCount = 0
         audio.onBuffer = { [weak self] samples, _ in
             guard let self = self else { return }
-            self.vad.process(rms: Self.rms(samples))
-            if self.state == .listening || self.state == .speaking {
-                self.stt.feed(samples, sampleRate: self.audio.sampleRate)
-            }
+            let r = Self.rms(samples)
+            bufCount += 1
+            if bufCount % 20 == 0 { vaLog("buffer #\(bufCount) n=\(samples.count) rms=\(r) state=\(self.state.rawValue)") }
+            self.vad.process(rms: r)
+            self.stt.feed(samples, sampleRate: self.audio.sampleRate)
         }
 
         stt.onPartial = { [weak self] text in
+            vaLog("STT partial: \(text)")
             self?.latestPartial = text
         }
 
         stt.onFinal = { [weak self] text in
             guard let self = self else { return }
+            vaLog("STT final: \(text)")
             self.latestPartial = ""
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
@@ -87,12 +91,18 @@ public final class VoiceSession {
 
         vad.onSpeechStart = { [weak self] in
             guard let self = self else { return }
-            if self.state == .speaking { self.bargeIn() }
+            vaLog("VAD speechStart state=\(self.state.rawValue)")
+            if self.state == .speaking {
+                self.bargeIn()
+            } else if self.state == .listening {
+                self.stt.start()
+            }
         }
 
         vad.onSpeechEnd = { [weak self] in
             guard let self = self else { return }
-            if self.state == .listening { self.stt.reset() }
+            vaLog("VAD speechEnd state=\(self.state.rawValue)")
+            if self.stt.isActive { self.stt.finish() }
         }
     }
 
@@ -206,6 +216,7 @@ public final class VoiceSession {
         tts.stopImmediately()
         stt.reset()
         state = .listening
+        stt.start()
     }
 
     private static func rms(_ samples: [Float]) -> Float {
