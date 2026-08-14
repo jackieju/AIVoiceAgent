@@ -10,6 +10,7 @@
 - **流式朗读**：大模型一边流式返回，一边按句子朗读，不用等整段说完。
 - **随时打断**：朗读过程中你一开口，立即停止朗读、重新聆听（barge-in）。
 - **回声消除**：VPIO + AEC，朗读声不会污染识别。
+- **工具调用**：大模型可调用内置工具（读写文件、跑命令、搜索、抓网页）和外部 MCP 工具，多轮回路自动完成任务后语音播报结果（详见「工具系统」）。
 - **上下文压缩**（可选）：接入 NVP server，长对话自动压缩历史，省 token。找不到 NVP 时自动降级为直接对话，不影响使用。
 
 ## 依赖
@@ -56,10 +57,65 @@ export AIVOICEAGENT_API_KEY=你的key
 | `systemPrompt` | 系统提示词。样例里已写好「语音场景」提示（回复口语化、不用 markdown） |
 | `voice.ttsVoice` | 朗读语言/语音，如 `zh-CN` |
 | `voice.sttLocale` | 识别语言，如 `zh-CN` |
+| `maxRounds` | 单次对话里工具调用的最大轮数上限，默认 5（防止工具回路无限循环） |
+| `mcpServers` | 外部 MCP 工具服务配置（见下文「工具系统」） |
 | `nvp.enabled` | 是否启用上下文压缩，`false` 则完全不调 NVP |
 | `nvp.binaryPath` | NVP server 可执行文件路径（见下文说明） |
 | `nvp.dbPath` | 语音对话专用记忆库路径（独立于主库，避免污染） |
 | `nvp.projectId` | 记忆分区标识 |
+
+## 工具系统
+
+大模型不只是聊天——它可以调用工具来读写文件、执行命令、联网搜索。你说一句「帮我看看某个文件里写了什么」「跑一下测试」，它会自己调工具完成，再用语音把结果讲给你听。
+
+工具调用是流式的多轮回路：大模型可以连续调用多个工具、拿到结果后继续调，直到得出最终回答（受 `maxRounds` 上限约束）。工具执行期间会先播报一句桥接语（如「正在执行…」），执行结束后继续朗读结果。工具执行中你随时可以开口打断（barge-in）。
+
+### 内置工具（无需配置，默认可用）
+
+参数名与 opencode 对齐，方便迁移：
+
+| 工具 | 作用 | 主要参数 |
+|---|---|---|
+| `read` | 读文件（支持目录列表、大文件按行 offset/limit） | `filePath`、`offset`、`limit` |
+| `write` | 写文件（覆盖写，自动建目录） | `filePath`、`content` |
+| `bash` | 执行 shell 命令（用 `workdir` 指定目录，勿用 `cd`） | `command`、`timeout`(毫秒)、`workdir` |
+| `grep` | 按正则搜索文件内容 | `pattern`、`path`、`include` |
+| `glob` | 按 glob 模式查找文件 | `pattern`、`path` |
+| `webfetch` | 抓取网页内容 | `url`、`format` |
+
+内置工具直接运行在你本机、以你的用户权限执行——`bash` 能跑任意命令、`write` 能覆盖文件。语音场景下无二次确认，请在信任的环境使用。
+
+### MCP 工具（可选，扩展能力）
+
+除内置工具外，可通过 [MCP（Model Context Protocol）](https://modelcontextprotocol.io) 接入第三方工具服务，无需改本项目代码。在 `config.json` 的 `mcpServers` 里按「名字 → 启动命令」配置，程序启动时会以子进程方式拉起这些 server（stdio JSON-RPC），把它们暴露的工具合并进工具集。
+
+样例（接入官方文件系统 MCP server）：
+
+```json
+"mcpServers": {
+  "filesystem": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/Documents"]
+  }
+}
+```
+
+每个 MCP server 的配置字段：
+
+| 字段 | 说明 |
+|---|---|
+| `command` | 启动 server 的可执行文件，如 `npx`、`uvx`、`node`、绝对路径 |
+| `args` | 传给命令的参数数组（可选） |
+| `env` | 额外环境变量（可选），如 API key |
+
+常见公共 MCP server（社区维护，直接配即可用，无需自己写）：
+
+- `@modelcontextprotocol/server-filesystem` — 受限目录内的文件读写
+- `@modelcontextprotocol/server-github` — GitHub 仓库/Issue/PR 操作（需在 `env` 里配 token）
+- `@modelcontextprotocol/server-fetch` — 网页抓取
+- 更多见 [MCP servers 列表](https://github.com/modelcontextprotocol/servers)
+
+MCP server 是异步后台连接的：即使某个 server 启动失败或很慢，也不会阻塞对话——它的工具连上后才会加入工具集，主窗口会提示「已连接 N 个 MCP 工具」。不需要 MCP 时，删掉 `mcpServers` 字段或留空即可，只用内置工具。
 
 ### 关于 NVP（上下文压缩，可选）
 
@@ -106,6 +162,7 @@ bun run build   # 产出 dist/nvp-server
 - `[闲置]` idle
 - `[🎙️ 聆听中…]` 正在听你说话
 - `[🤔 思考中…]` 等大模型回复
+- `[🛠️ 执行中…]` 正在调用工具
 - `[🔊 说话中…]` 正在朗读回复
 
 ## 架构
@@ -114,9 +171,13 @@ bun run build   # 产出 dist/nvp-server
 
 - **`VoiceAgentCore`（平台无关）**
   - `Config.swift` — 配置加载，支持 `{env:VAR}` 展开
-  - `LLMProvider.swift` — Anthropic SSE / OpenAI 兼容流式接口
+  - `LLMProvider.swift` — Anthropic SSE / OpenAI 兼容流式接口（含 tool_use / tool_calls 流式解析）
   - `VAD.swift` — 能量 VAD（RMS + 自适应噪声底 + hangover）
-  - `VoiceSession.swift` — 对话编排器，状态机 `idle→listening→thinking→speaking` + barge-in + 流式分句
+  - `VoiceSession.swift` — 对话编排器，状态机 `idle→listening→thinking→working→speaking` + barge-in + 流式分句
+  - `AgentLoop.swift` — 多轮工具调用回路（流式喂 TTS、并发执行工具、错误回填、barge-in 丢弃结果）
+  - `ToolTypes.swift` — `Tool` 协议 + 线程安全 `ToolRegistry`
+  - `BuiltinTools.swift` / `SearchTools.swift` / `WebTool.swift` — 内置工具 read/write/bash/grep/glob/webfetch
+  - `MCPClient.swift` — MCP stdio 客户端（JSON-RPC 2.0，握手 + tools/list + tools/call）
   - `NVPClient.swift` — NVP server 子进程客户端（JSON-RPC over stdin/stdout）
   - 四个协议 `AudioIO`/`Stt`/`Tts`/`Vad` 定义平台接口
 - **`VoiceAgentMac`（macOS 实现）**

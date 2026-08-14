@@ -5,10 +5,17 @@
     "baseURL": "http://localhost:6655/anthropic",
     "apiKey": "{env:AIVOICEAGENT_API_KEY}"
   },
-  "systemPrompt": "你是一个语音助手。用户在用语音跟你对话，你的回复会被朗读出来。所以：回答要简短口语化，像聊天一样；不要用 markdown、代码块、列表符号、表情符号；不要说“如下所示”“见下方”这类指向屏幕的话。",
+  "systemPrompt": "你是一个语音助手。用户在用语音跟你对话，你的回复会被朗读出来。所以：回答要简短口语化，像聊天一样；不要用 markdown、代码块、列表符号、表情符号；不要说“如下所示”“见下方”这类指向屏幕的话。你可以调用工具来读写文件、执行命令、联网搜索。",
+  "maxRounds": 5,
   "voice": {
     "ttsVoice": "zh-CN",
     "sttLocale": "zh-CN"
+  },
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/Documents"]
+    }
   },
   "nvp": {
     "enabled": true,

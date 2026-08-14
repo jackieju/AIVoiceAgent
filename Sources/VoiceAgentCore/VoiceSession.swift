@@ -4,6 +4,7 @@ public enum VoiceState: String {
     case idle
     case listening
     case thinking
+    case working
     case speaking
 }
 
@@ -17,10 +18,12 @@ public final class VoiceSession {
     private let tts: Tts
     private let llm: LLMProvider
     private let nvp: NVPClient?
+    private let agent: AgentLoop
 
     public var onState: ((VoiceState) -> Void)?
     public var onUserText: ((String) -> Void)?
     public var onAgentText: ((String) -> Void)?
+    public var onToolActivity: ((String) -> Void)?
 
     private var state: VoiceState = .idle {
         didSet { if state != oldValue { onState?(state) } }
@@ -39,13 +42,14 @@ public final class VoiceSession {
 
     private let sentenceEnders: Set<Character> = ["。", "！", "？", ".", "!", "?", "\n"]
 
-    public init(audio: AudioIO, vad: Vad, stt: Stt, tts: Tts, llm: LLMProvider, nvp: NVPClient? = nil) {
+    public init(audio: AudioIO, vad: Vad, stt: Stt, tts: Tts, llm: LLMProvider, registry: ToolRegistry = ToolRegistry(), system: String? = nil, maxRounds: Int = 5, nvp: NVPClient? = nil) {
         self.audio = audio
         self.vad = vad
         self.stt = stt
         self.tts = tts
         self.llm = llm
         self.nvp = nvp
+        self.agent = AgentLoop(provider: llm, registry: registry, system: system, maxRounds: maxRounds)
         wire()
     }
 
@@ -102,32 +106,54 @@ public final class VoiceSession {
 
         let messagesToSend = buildOutgoingMessages()
 
-        var accumulated = ""
-        llm.stream(
-            messages: messagesToSend,
-            onDelta: { [weak self] delta in
-                guard let self = self, generation == self.replyGeneration else { return }
-                accumulated += delta
-                self.pendingReply += delta
-                self.flushSentences(generation: generation)
-            },
-            onDone: { [weak self] in
-                guard let self = self, generation == self.replyGeneration else { return }
-                self.flushRemainder(generation: generation)
-                if !accumulated.isEmpty {
-                    self.history.append(ChatMessage(role: .assistant, text: accumulated))
-                    self.onAgentText?(accumulated)
-                    self.nvp?.ingest(sessionId: self.sessionId, turn: [
-                        (role: "user", content: text),
-                        (role: "assistant", content: accumulated),
-                    ])
+        var accumulatedText = ""
+        var newMessages: [ChatMessage] = []
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            await self.agent.run(
+                history: messagesToSend,
+                isCurrent: { [weak self] in self?.replyGeneration == generation },
+                onTextDelta: { [weak self] delta in
+                    guard let self = self, generation == self.replyGeneration else { return }
+                    accumulatedText += delta
+                    self.pendingReply += delta
+                    self.flushSentences(generation: generation)
+                },
+                onToolStart: { [weak self] name in
+                    guard let self = self, generation == self.replyGeneration else { return }
+                    self.flushRemainder(generation: generation)
+                    self.state = .working
+                    self.onToolActivity?(name)
+                },
+                onAssistantMessage: { msg in
+                    newMessages.append(msg)
+                },
+                onToolResultMessage: { msg in
+                    newMessages.append(msg)
+                },
+                onDone: { [weak self] reason in
+                    guard let self = self, generation == self.replyGeneration else { return }
+                    self.flushRemainder(generation: generation)
+                    self.history.append(contentsOf: newMessages)
+                    if !accumulatedText.isEmpty {
+                        self.onAgentText?(accumulatedText)
+                    }
+                    switch reason {
+                    case .error(let error):
+                        self.speakChunk("抱歉，出错了：\(error)", generation: generation)
+                    default:
+                        break
+                    }
+                    if !accumulatedText.isEmpty {
+                        self.nvp?.ingest(sessionId: self.sessionId, turn: [
+                            (role: "user", content: text),
+                            (role: "assistant", content: accumulatedText),
+                        ])
+                    }
                 }
-            },
-            onError: { [weak self] error in
-                guard let self = self, generation == self.replyGeneration else { return }
-                self.speakChunk("抱歉，出错了：\(error)", generation: generation)
-            }
-        )
+            )
+        }
     }
 
     /// 低于阈值直接发原始历史（新会话还没压缩内容，调 NVP 纯属浪费）；

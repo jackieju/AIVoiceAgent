@@ -4,3 +4,4 @@
 *.xcodeproj
 Probe.app/
 dist/
+.playwright-mcp/

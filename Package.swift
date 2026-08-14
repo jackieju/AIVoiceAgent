@@ -20,5 +20,10 @@ let package = Package(
                 .linkedFramework("Carbon"),
             ]
         ),
+        .testTarget(
+            name: "VoiceAgentCoreTests",
+            dependencies: ["VoiceAgentCore"],
+            path: "Tests/VoiceAgentCoreTests"
+        ),
     ]
 )

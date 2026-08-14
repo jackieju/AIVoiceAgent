@@ -218,7 +218,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         self.nvpClient = nvpClient
 
-        let session = VoiceSession(audio: audio, vad: vad, stt: stt, tts: tts, llm: llm, nvp: nvpClient)
+        let registry = ToolRegistry(makeBuiltinTools())
+        if let mcpServers = config.mcpServers, !mcpServers.isEmpty {
+            let serverConfigs = mcpServers.map { name, cfg in
+                MCPServerConfig(name: name, command: cfg.command, args: cfg.args ?? [], env: cfg.env ?? [:])
+            }
+            Task {
+                let (tools, _) = await connectMCPServers(serverConfigs)
+                registry.registerAll(tools)
+                let count = tools.count
+                if count > 0 {
+                    await MainActor.run { [weak self] in
+                        self?.appendLine("已连接 \(count) 个 MCP 工具")
+                    }
+                }
+            }
+        }
+
+        let session = VoiceSession(
+            audio: audio, vad: vad, stt: stt, tts: tts, llm: llm,
+            registry: registry,
+            system: config.systemPrompt,
+            maxRounds: config.maxRounds ?? 5,
+            nvp: nvpClient
+        )
         session.onState = { [weak self] state in
             DispatchQueue.main.async { self?.updateStateUI(state) }
         }
@@ -227,6 +250,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         session.onAgentText = { [weak self] text in
             DispatchQueue.main.async { self?.appendLine("🤖 助手：\(text)") }
+        }
+        session.onToolActivity = { [weak self] name in
+            DispatchQueue.main.async { self?.appendLine("🛠️ 调用工具：\(name)") }
         }
         self.session = session
 
@@ -247,6 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case .idle:      label = "闲置";        icon = "⏸️"
         case .listening: label = "🎙️ 聆听中…"; icon = "🎙️"
         case .thinking:  label = "🤔 思考中…"; icon = "🤔"
+        case .working:   label = "🛠️ 执行工具…"; icon = "🛠️"
         case .speaking:  label = "🔊 说话中…"; icon = "🔊"
         }
         statusLabel?.stringValue = label

@@ -32,12 +32,20 @@ public struct NVPConfig: Codable {
     public var projectId: String?
 }
 
+public struct MCPServerConfigJSON: Codable {
+    public var command: String
+    public var args: [String]?
+    public var env: [String: String]?
+}
+
 public struct AgentConfig: Codable {
     public var model: String
     public var provider: ProviderConfig
     public var systemPrompt: String?
     public var voice: VoiceConfig?
     public var nvp: NVPConfig?
+    public var maxRounds: Int?
+    public var mcpServers: [String: MCPServerConfigJSON]?
 
     public static func load(from path: String) throws -> AgentConfig {
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
