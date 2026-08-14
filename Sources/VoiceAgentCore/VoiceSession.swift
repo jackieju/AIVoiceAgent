@@ -76,7 +76,7 @@ public final class VoiceSession {
             guard let self = self else { return }
             let r = Self.rms(samples)
             bufCount += 1
-            if bufCount % 20 == 0 { vaLog("buffer #\(bufCount) n=\(samples.count) rms=\(r) state=\(self.state.rawValue)") }
+            if bufCount % 20 == 0 { vaLog("buffer #\(bufCount) n=\(samples.count) rms=\(r)") }
             self.vad.process(rms: r)
             self.stt.feed(samples, sampleRate: self.audio.sampleRate)
         }

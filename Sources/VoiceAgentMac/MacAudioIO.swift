@@ -16,6 +16,10 @@ final class MacAudioIO: NSObject, AudioIO {
 
     private var started = false
 
+    // Config-change notifications arrive on an AV-internal thread; touching the
+    // engine there races the VPIO unit. Serialize all lifecycle work here.
+    private let engineQueue = DispatchQueue(label: "com.aivoiceagent.audio.engine")
+
     var sampleRate: Double { vpFormat?.sampleRate ?? 48000 }
 
     func start() throws {
@@ -64,7 +68,9 @@ final class MacAudioIO: NSObject, AudioIO {
         NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
                                                object: engine, queue: nil) { [weak self] _ in
             guard let self = self else { return }
-            if !self.engine.isRunning { try? self.engine.start() }
+            self.engineQueue.async {
+                if self.started, !self.engine.isRunning { try? self.engine.start() }
+            }
         }
 
         engine.prepare()
