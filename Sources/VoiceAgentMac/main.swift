@@ -195,7 +195,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func setupSession(with config: AgentConfig) {
         let audio = MacAudioIO()
-        let tts = MacTts(audio: audio, voiceLanguage: config.voice?.ttsVoice)
+        let tts = MacTts(audio: audio,
+                         voiceLanguage: config.voice?.ttsVoice,
+                         ttsEngine: config.voice?.ttsEngine,
+                         edgePythonPath: config.voice?.edgePythonPath,
+                         edgeVoiceZh: config.voice?.edgeVoiceZh,
+                         edgeVoiceEn: config.voice?.edgeVoiceEn)
         let stt = MacStt(locale: config.voice?.sttLocale ?? "zh-CN")
         let vad = EnergyVad()
         let llm = makeProvider(from: config)
@@ -218,7 +223,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         self.nvpClient = nvpClient
 
-        let registry = ToolRegistry(makeBuiltinTools())
+        let registry = ToolRegistry(makeBuiltinTools() + makeScreenTools())
+        registry.setAuthorizer { [weak self] toolName, description in
+            await self?.requestToolAuthorization(toolName: toolName, description: description) ?? false
+        }
         if let mcpServers = config.mcpServers, !mcpServers.isEmpty {
             let serverConfigs = mcpServers.map { name, cfg in
                 MCPServerConfig(name: name, command: cfg.command, args: cfg.args ?? [], env: cfg.env ?? [:])
@@ -355,6 +363,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // MARK: Alerts
+
+    /// Hops from Core's background task to the main thread for a modal NSAlert,
+    /// suspending the tool until the user responds. Denial feeds an error back to
+    /// the model, not a crash.
+    private func requestToolAuthorization(toolName: String, description: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "允许执行操作？"
+                alert.informativeText = "AI 助手请求执行一个可能修改系统的操作：\n\n\(description)"
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "允许")
+                alert.addButton(withTitle: "拒绝")
+                let response = alert.runModal()
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+        }
+    }
 
     private func showFatalAlert(title: String, message: String) {
         let alert = NSAlert()

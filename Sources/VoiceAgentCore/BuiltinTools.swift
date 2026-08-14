@@ -81,6 +81,8 @@ public struct WriteTool: Tool {
         )
     }
 
+    public var sideEffect: ToolSideEffect { .destructive }
+
     public func execute(input: [String: Any], isCancelled: @escaping () -> Bool) async -> ToolOutput {
         guard let filePath = input["filePath"] as? String, !filePath.isEmpty else {
             return .failure("write: missing required parameter 'filePath'")
@@ -120,6 +122,53 @@ public struct BashTool: Tool {
                 "required": ["command"],
             ]
         )
+    }
+
+    public var sideEffect: ToolSideEffect { .destructive }
+
+    /// Conservative fail-safe: a command is read-only ONLY if every segment's
+    /// first word is in a known read-only allowlist and no output redirection
+    /// (`>`/`>>`) appears. Anything unrecognized is treated as destructive so it
+    /// requires user authorization.
+    public func sideEffect(for input: [String: Any]) -> ToolSideEffect {
+        guard let command = input["command"] as? String else { return .destructive }
+        return BashTool.isReadOnly(command) ? .readOnly : .destructive
+    }
+
+    private static let readOnlyCommands: Set<String> = [
+        "ls", "cat", "head", "tail", "wc", "pwd", "echo", "which", "whoami",
+        "find", "grep", "rg", "date", "env", "printenv", "uname", "hostname",
+        "file", "stat", "du", "df", "ps", "top", "uptime", "id", "groups",
+        "basename", "dirname", "realpath", "readlink", "sort", "uniq", "cut",
+        "awk", "sed", "tr", "diff", "cmp", "md5", "shasum", "sha256sum",
+    ]
+
+    private static let readOnlyGitSubcommands: Set<String> = [
+        "status", "log", "diff", "show", "branch", "remote", "config",
+        "describe", "rev-parse", "blame", "ls-files", "ls-remote",
+    ]
+
+    static func isReadOnly(_ command: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        if trimmed.contains(">") || trimmed.contains("`") || trimmed.contains("$(") {
+            return false
+        }
+        let segments = trimmed
+            .components(separatedBy: CharacterSet(charactersIn: "|&;\n"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !segments.isEmpty else { return true }
+        for segment in segments {
+            let words = segment.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            guard let first = words.first else { return false }
+            if first == "git" {
+                guard words.count >= 2, readOnlyGitSubcommands.contains(words[1]) else { return false }
+                continue
+            }
+            guard readOnlyCommands.contains(first) else { return false }
+        }
+        return true
     }
 
     public func execute(input: [String: Any], isCancelled: @escaping () -> Bool) async -> ToolOutput {
@@ -168,5 +217,101 @@ public struct BashTool: Tool {
             return .ok("(exit \(process.terminationStatus))\n" + clipped)
         }
         return .ok(clipped)
+    }
+}
+
+public struct EditTool: Tool {
+    public init() {}
+    public var spec: ToolSpec {
+        ToolSpec(
+            name: "edit",
+            description: "Replace an exact string in a file. oldString must match uniquely unless replaceAll is true.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "filePath": ["type": "string", "description": "The absolute path to the file to modify"],
+                    "oldString": ["type": "string", "description": "The text to replace"],
+                    "newString": ["type": "string", "description": "The text to replace it with (must be different from oldString)"],
+                    "replaceAll": ["type": "boolean", "description": "Replace all occurrences of oldString (default false)"],
+                ],
+                "required": ["filePath", "oldString", "newString"],
+            ]
+        )
+    }
+
+    public var sideEffect: ToolSideEffect { .destructive }
+
+    public func execute(input: [String: Any], isCancelled: @escaping () -> Bool) async -> ToolOutput {
+        guard let filePath = input["filePath"] as? String, !filePath.isEmpty else {
+            return .failure("edit: missing required parameter 'filePath'")
+        }
+        guard let oldString = input["oldString"] as? String else {
+            return .failure("edit: missing required parameter 'oldString'")
+        }
+        guard let newString = input["newString"] as? String else {
+            return .failure("edit: missing required parameter 'newString'")
+        }
+        if oldString == newString {
+            return .failure("edit: newString must be different from oldString")
+        }
+        guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else {
+            return .failure("edit: cannot read file: \(filePath)")
+        }
+        let replaceAll = (input["replaceAll"] as? Bool) ?? false
+        if oldString.isEmpty {
+            return .failure("edit: oldString must not be empty")
+        }
+        let occurrences = content.components(separatedBy: oldString).count - 1
+        if occurrences == 0 {
+            return .failure("edit: oldString not found in \(filePath)")
+        }
+        if occurrences > 1 && !replaceAll {
+            return .failure("edit: oldString found \(occurrences) times; provide more context or set replaceAll")
+        }
+        let updated = content.replacingOccurrences(of: oldString, with: newString)
+        do {
+            try updated.write(toFile: filePath, atomically: true, encoding: .utf8)
+            return .ok("Replaced \(replaceAll ? occurrences : 1) occurrence(s) in \(filePath)")
+        } catch {
+            return .failure("edit: \(error.localizedDescription)")
+        }
+    }
+}
+
+public struct ListTool: Tool {
+    public init() {}
+    public var spec: ToolSpec {
+        ToolSpec(
+            name: "list",
+            description: "List directory contents. Subdirectories are suffixed with '/'.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "path": ["type": "string", "description": "The absolute path to the directory to list. Defaults to the current directory."],
+                ],
+                "required": [],
+            ]
+        )
+    }
+
+    public func execute(input: [String: Any], isCancelled: @escaping () -> Bool) async -> ToolOutput {
+        let path = (input["path"] as? String) ?? FileManager.default.currentDirectoryPath
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else {
+            return .failure("list: path not found: \(path)")
+        }
+        guard isDir.boolValue else {
+            return .failure("list: not a directory: \(path)")
+        }
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: path) else {
+            return .failure("list: cannot list directory: \(path)")
+        }
+        let lines = entries.sorted().map { name -> String in
+            var sub: ObjCBool = false
+            let full = (path as NSString).appendingPathComponent(name)
+            FileManager.default.fileExists(atPath: full, isDirectory: &sub)
+            return sub.boolValue ? name + "/" : name
+        }
+        return .ok(lines.isEmpty ? "(empty directory)" : lines.joined(separator: "\n"))
     }
 }

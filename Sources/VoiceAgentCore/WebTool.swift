@@ -110,6 +110,8 @@ public func makeBuiltinTools(bashTimeoutMs: Int = 120_000) -> [Tool] {
     [
         ReadTool(),
         WriteTool(),
+        EditTool(),
+        ListTool(),
         BashTool(defaultTimeoutMs: bashTimeoutMs),
         GrepTool(),
         GlobTool(),

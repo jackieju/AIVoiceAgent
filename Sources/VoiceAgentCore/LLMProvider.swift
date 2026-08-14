@@ -197,7 +197,14 @@ public final class AnthropicProvider: LLMProvider {
                 return ["type": "text", "text": s]
             case .toolUse(let id, let name, let input):
                 return ["type": "tool_use", "id": id, "name": name, "input": input]
-            case .toolResult(let toolUseId, let content, let isError):
+            case .toolResult(let toolUseId, let content, let isError, let imageBase64):
+                if let imageBase64 {
+                    let contentBlocks: [[String: Any]] = [
+                        ["type": "text", "text": content],
+                        ["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": imageBase64]],
+                    ]
+                    return ["type": "tool_result", "tool_use_id": toolUseId, "content": contentBlocks, "is_error": isError]
+                }
                 return ["type": "tool_result", "tool_use_id": toolUseId, "content": content, "is_error": isError]
             }
         }
@@ -312,7 +319,7 @@ public final class OpenAICompatibleProvider: LLMProvider {
             case .toolUse(let id, let name, let input):
                 let argString = (try? JSONSerialization.data(withJSONObject: input)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
                 toolCalls.append(["id": id, "type": "function", "function": ["name": name, "arguments": argString]])
-            case .toolResult(let toolUseId, let content, _):
+            case .toolResult(let toolUseId, let content, _, _):
                 toolResults.append(["role": "tool", "tool_call_id": toolUseId, "content": content])
             }
         }

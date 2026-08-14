@@ -98,7 +98,7 @@ public final class AgentLoop {
                 let registry = self.registry
                 group.addTask {
                     let out = await registry.execute(name: tu.name, input: tu.input, isCancelled: { !isCurrent() })
-                    return (i, .toolResult(toolUseId: tu.id, content: out.content, isError: out.isError))
+                    return (i, .toolResult(toolUseId: tu.id, content: out.content, isError: out.isError, imageBase64: out.imageBase64))
                 }
             }
             var collected: [(Int, ContentBlock)] = []
