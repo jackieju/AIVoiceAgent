@@ -23,6 +23,11 @@ public struct ProviderConfig: Codable {
 public struct VoiceConfig: Codable {
     public var ttsVoice: String?
     public var sttLocale: String?
+    /// "edge" (Microsoft neural, needs edgePythonPath) or "system" (AVSpeechSynthesizer, offline).
+    public var ttsEngine: String?
+    public var edgePythonPath: String?
+    public var edgeVoiceZh: String?
+    public var edgeVoiceEn: String?
 }
 
 public struct NVPConfig: Codable {
