@@ -257,7 +257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             registry: registry,
             system: config.systemPrompt,
             maxRounds: config.maxRounds ?? 5,
-            nvp: nvpClient
+            nvp: nvpClient,
+            store: HistoryStore(path: "~/Library/Application Support/AIVoiceAgent/history.json")
         )
         session.onState = { [weak self] state in
             DispatchQueue.main.async { self?.updateStateUI(state) }
@@ -277,7 +278,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         appendLine("model=\(config.model)  provider=\(config.provider.type)")
         appendLine("开始说话，停顿后自动提交。说话可打断助手。\n")
 
+        replayHistory(session.loadedHistory)
+
         startListening()
+    }
+
+    private func replayHistory(_ history: [ChatMessage]) {
+        guard !history.isEmpty else { return }
+        appendLine("—— 上次对话 ——")
+        for msg in history {
+            let text = msg.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            switch msg.role {
+            case .user:      appendLine("👤 你：\(text)")
+            case .assistant: appendLine("🤖 助手：\(text)")
+            }
+        }
+        appendLine("—— 继续对话 ——\n")
     }
 
     // MARK: UI updates

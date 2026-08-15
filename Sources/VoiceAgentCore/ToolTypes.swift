@@ -11,6 +11,62 @@ public enum ContentBlock {
     case toolResult(toolUseId: String, content: String, isError: Bool, imageBase64: String? = nil)
 }
 
+/// Persistence-only Codable. `toolUse.input` ([String:Any], not Codable) is
+/// stored as a JSON string; `toolResult.imageBase64` is intentionally DROPPED
+/// on encode — screenshots are ephemeral and only bloat the history file.
+extension ContentBlock: Codable {
+    private enum Kind: String, Codable { case text, toolUse, toolResult }
+    private enum CodingKeys: String, CodingKey {
+        case kind, text, id, name, inputJSON, toolUseId, content, isError
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .text(let s):
+            try c.encode(Kind.text, forKey: .kind)
+            try c.encode(s, forKey: .text)
+        case .toolUse(let id, let name, let input):
+            try c.encode(Kind.toolUse, forKey: .kind)
+            try c.encode(id, forKey: .id)
+            try c.encode(name, forKey: .name)
+            let json: String
+            if JSONSerialization.isValidJSONObject(input),
+               let data = try? JSONSerialization.data(withJSONObject: input),
+               let s = String(data: data, encoding: .utf8) {
+                json = s
+            } else {
+                json = "{}"
+            }
+            try c.encode(json, forKey: .inputJSON)
+        case .toolResult(let toolUseId, let content, let isError, _):
+            try c.encode(Kind.toolResult, forKey: .kind)
+            try c.encode(toolUseId, forKey: .toolUseId)
+            try c.encode(content, forKey: .content)
+            try c.encode(isError, forKey: .isError)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try c.decode(Kind.self, forKey: .kind)
+        switch kind {
+        case .text:
+            self = .text(try c.decode(String.self, forKey: .text))
+        case .toolUse:
+            let id = try c.decode(String.self, forKey: .id)
+            let name = try c.decode(String.self, forKey: .name)
+            let json = try c.decodeIfPresent(String.self, forKey: .inputJSON) ?? "{}"
+            self = .toolUse(id: id, name: name, input: parseJSONObject(json))
+        case .toolResult:
+            let toolUseId = try c.decode(String.self, forKey: .toolUseId)
+            let content = try c.decode(String.self, forKey: .content)
+            let isError = try c.decodeIfPresent(Bool.self, forKey: .isError) ?? false
+            self = .toolResult(toolUseId: toolUseId, content: content, isError: isError, imageBase64: nil)
+        }
+    }
+}
+
 public struct ToolSpec {
     public let name: String
     public let description: String

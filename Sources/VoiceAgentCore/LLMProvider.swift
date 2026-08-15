@@ -1,9 +1,11 @@
 import Foundation
 
-public struct ChatMessage {
-    public enum Role: String { case user, assistant }
+public struct ChatMessage: Codable {
+    public enum Role: String, Codable { case user, assistant }
     public let role: Role
     public let content: [ContentBlock]
+
+    private enum CodingKeys: String, CodingKey { case role, content }
 
     public init(role: Role, content: [ContentBlock]) {
         self.role = role

@@ -19,6 +19,7 @@ public final class VoiceSession {
     private let llm: LLMProvider
     private let nvp: NVPClient?
     private let agent: AgentLoop
+    private let store: HistoryStore?
 
     public var onState: ((VoiceState) -> Void)?
     public var onUserText: ((String) -> Void)?
@@ -34,7 +35,7 @@ public final class VoiceSession {
     private var pendingReply = ""
     private var replyGeneration = 0
 
-    private let sessionId = "voice-\(Int(Date().timeIntervalSince1970))"
+    private let sessionId = "voice-main"
     private let compressionSwitchThresholdChars = 16_000
     private let contextWindowTokens = 128_000
     private let budgetRatio = 0.5
@@ -46,16 +47,20 @@ public final class VoiceSession {
     /// AVAudioPlayerNode.stop() on the audio tap thread — it deadlock-traps.
     private let controlQueue = DispatchQueue(label: "voiceagent.session.control")
 
-    public init(audio: AudioIO, vad: Vad, stt: Stt, tts: Tts, llm: LLMProvider, registry: ToolRegistry = ToolRegistry(), system: String? = nil, maxRounds: Int = 5, nvp: NVPClient? = nil) {
+    public init(audio: AudioIO, vad: Vad, stt: Stt, tts: Tts, llm: LLMProvider, registry: ToolRegistry = ToolRegistry(), system: String? = nil, maxRounds: Int = 5, nvp: NVPClient? = nil, store: HistoryStore? = nil) {
         self.audio = audio
         self.vad = vad
         self.stt = stt
         self.tts = tts
         self.llm = llm
         self.nvp = nvp
+        self.store = store
         self.agent = AgentLoop(provider: llm, registry: registry, system: system, maxRounds: maxRounds)
+        self.history = store?.load() ?? []
         wire()
     }
+
+    public var loadedHistory: [ChatMessage] { history }
 
     public func start() throws {
         try audio.start()
@@ -166,6 +171,7 @@ public final class VoiceSession {
                         guard generation == self.replyGeneration else { return }
                         self.flushRemainder(generation: generation)
                         self.history.append(contentsOf: newMessages)
+                        self.store?.save(self.history)
                         if !accumulatedText.isEmpty {
                             self.onAgentText?(accumulatedText)
                         }
