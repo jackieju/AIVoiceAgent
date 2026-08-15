@@ -121,7 +121,7 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertEqual(c.toolStarts, ["read"])
         XCTAssertEqual(c.assistantMessages.count, 2)
         XCTAssertEqual(c.toolResultMessages.count, 1)
-        guard case .toolResult(let id, let content, let isErr)? = c.toolResultMessages.first?.content.first else {
+        guard case .toolResult(let id, let content, let isErr, _)? = c.toolResultMessages.first?.content.first else {
             return XCTFail("expected tool_result block")
         }
         XCTAssertEqual(id, "t1")
@@ -154,8 +154,8 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertEqual(c.toolStarts, ["alpha", "beta"])
         let results = c.toolResultMessages.first?.content ?? []
         XCTAssertEqual(results.count, 2)
-        guard case .toolResult(let id0, _, _) = results[0],
-              case .toolResult(let id1, _, _) = results[1] else {
+        guard case .toolResult(let id0, _, _, _) = results[0],
+              case .toolResult(let id1, _, _, _) = results[1] else {
             return XCTFail("expected two tool_result blocks")
         }
         XCTAssertEqual(id0, "id-a")
@@ -207,7 +207,7 @@ final class AgentLoopTests: XCTestCase {
 
         let c = await run(provider: provider, registry: registry)
 
-        guard case .toolResult(_, let content, let isErr)? = c.toolResultMessages.first?.content.first else {
+        guard case .toolResult(_, let content, let isErr, _)? = c.toolResultMessages.first?.content.first else {
             return XCTFail("expected tool_result block")
         }
         XCTAssertTrue(isErr)
@@ -228,7 +228,7 @@ final class AgentLoopTests: XCTestCase {
 
         let c = await run(provider: provider, registry: registry)
 
-        guard case .toolResult(_, let content, let isErr)? = c.toolResultMessages.first?.content.first else {
+        guard case .toolResult(_, let content, let isErr, _)? = c.toolResultMessages.first?.content.first else {
             return XCTFail("expected tool_result block")
         }
         XCTAssertTrue(isErr)
