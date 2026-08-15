@@ -200,3 +200,13 @@ bun run build   # 产出 dist/nvp-server
 - v1 是命令行 + 可选 `.app` 包装，无独立设置界面，配置靠改 json。
 - NVP 二进制路径默认写死指向同级项目位置，换环境需在 config 里改 `nvp.binaryPath`。
 - 目前只做 macOS；core 层已抽象协议，Windows 实现留待将来。
+
+## License
+
+Copyright (C) 2026 Jackie Ju
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
