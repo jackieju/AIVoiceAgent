@@ -230,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         self.nvpClient = nvpClient
 
-        let registry = ToolRegistry(makeBuiltinTools() + makeScreenTools())
+        let registry = ToolRegistry(makeBuiltinTools(opencode: config.opencode) + makeScreenTools())
         self.registry = registry
         self.loadedConfig = config
         registry.setAuthorizer { [weak self] toolName, description in

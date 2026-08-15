@@ -106,8 +106,8 @@ public struct WebFetchTool: Tool {
     }
 }
 
-public func makeBuiltinTools(bashTimeoutMs: Int = 120_000) -> [Tool] {
-    [
+public func makeBuiltinTools(bashTimeoutMs: Int = 120_000, opencode: OpenCodeConfig? = nil) -> [Tool] {
+    var tools: [Tool] = [
         ReadTool(),
         WriteTool(),
         EditTool(),
@@ -117,4 +117,8 @@ public func makeBuiltinTools(bashTimeoutMs: Int = 120_000) -> [Tool] {
         GlobTool(),
         WebFetchTool(),
     ]
+    if let opencode {
+        tools.append(OpenCodeSessionTool(config: opencode))
+    }
+    return tools
 }

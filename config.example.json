@@ -22,5 +22,11 @@
     "binaryPath": "~/Desktop/ju/projects/AIAgentLocalMemory/packages/server/dist/nvp-server",
     "dbPath": "~/Library/Application Support/AIVoiceAgent/voice-memory.db",
     "projectId": "voice"
+  },
+  "opencode": {
+    "baseURL": "http://127.0.0.1:4096",
+    "username": "opencode",
+    "password": "{env:OPENCODE_SERVER_PASSWORD}",
+    "defaultSessionID": ""
   }
 }

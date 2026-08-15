@@ -43,6 +43,16 @@ public struct MCPServerConfigJSON: Codable {
     public var env: [String: String]?
 }
 
+public struct OpenCodeConfig: Codable {
+    /// e.g. "http://127.0.0.1:4096"
+    public var baseURL: String
+    /// HTTP Basic username; OpenCode server defaults to "opencode".
+    public var username: String?
+    /// Use "{env:OPENCODE_SERVER_PASSWORD}" to inject from the environment.
+    public var password: String?
+    public var defaultSessionID: String?
+}
+
 public struct AgentConfig: Codable {
     public var model: String
     public var provider: ProviderConfig
@@ -51,6 +61,7 @@ public struct AgentConfig: Codable {
     public var nvp: NVPConfig?
     public var maxRounds: Int?
     public var mcpServers: [String: MCPServerConfigJSON]?
+    public var opencode: OpenCodeConfig?
 
     public static func load(from path: String) throws -> AgentConfig {
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)

@@ -63,6 +63,7 @@ export AIVOICEAGENT_API_KEY=你的key
 | `nvp.binaryPath` | NVP server 可执行文件路径（见下文说明） |
 | `nvp.dbPath` | 语音对话专用记忆库路径（独立于主库，避免污染） |
 | `nvp.projectId` | 记忆分区标识 |
+| `opencode` | 与运行中的 OpenCode server 交互（见下文「工具系统」） |
 
 ## 工具系统
 
@@ -78,12 +79,35 @@ export AIVOICEAGENT_API_KEY=你的key
 |---|---|---|
 | `read` | 读文件（支持目录列表、大文件按行 offset/limit） | `filePath`、`offset`、`limit` |
 | `write` | 写文件（覆盖写，自动建目录） | `filePath`、`content` |
+| `edit` | 精确替换文件中的字符串 | `filePath`、`oldString`、`newString` |
+| `list` | 列出目录内容 | `path` |
 | `bash` | 执行 shell 命令（用 `workdir` 指定目录，勿用 `cd`） | `command`、`timeout`(毫秒)、`workdir` |
 | `grep` | 按正则搜索文件内容 | `pattern`、`path`、`include` |
 | `glob` | 按 glob 模式查找文件 | `pattern`、`path` |
 | `webfetch` | 抓取网页内容 | `url`、`format` |
 
-内置工具直接运行在你本机、以你的用户权限执行——`bash` 能跑任意命令、`write` 能覆盖文件。语音场景下无二次确认，请在信任的环境使用。
+破坏性操作（`write`、`edit`、以及 `bash` 里的写/删命令）会先弹出授权确认，批准后才执行；只读操作（`read`、`list`、`grep`、`glob`、`webfetch`）直接放行。
+
+### OpenCode 交互工具（可选，需配置 `opencode`）
+
+配置了 `opencode` 段后，会额外注册一个 `opencode` 工具，让大模型能操作一个正在运行的 OpenCode server（`opencode serve --port 4096`）。你可以用语音说「看看 OpenCode 有哪些 session」「读一下那个 session 最后的回复」「让 OpenCode 帮我改一下某文件」，它会通过这个工具完成。
+
+| `action` | 作用 | 需要参数 |
+|---|---|---|
+| `list` | 列出所有 session（id + 标题） | 无 |
+| `read` | 读某个 session 最后一条助手回复 | `sessionID`（可选，缺省用 `defaultSessionID`） |
+| `send` | 给某个 session 发消息并等待回复 | `sessionID`（可选）、`text` |
+
+`send` 属破坏性操作，执行前会弹授权确认；`list`/`read` 为只读直接放行。
+
+`config.json` 的 `opencode` 字段：
+
+| 字段 | 说明 |
+|---|---|
+| `baseURL` | OpenCode server 地址，如 `http://127.0.0.1:4096` |
+| `username` | HTTP Basic 用户名，OpenCode server 默认为 `opencode`（可选） |
+| `password` | HTTP Basic 密码，建议用 `{env:OPENCODE_SERVER_PASSWORD}` 从环境注入（可选） |
+| `defaultSessionID` | 缺省 session id，`read`/`send` 未指定时使用（可选） |
 
 ### MCP 工具（可选，扩展能力）
 
