@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var toggleMenuItem: NSMenuItem!
     private var showHideMenuItem: NSMenuItem!
     private var toolsWindowController: ToolsWindowController?
+    private var settingsWindowController: SettingsWindowController?
 
     private var session: VoiceSession?
     private var nvpClient: NVPClient?
@@ -188,6 +189,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         toolsMenuItem.target = self
         menu.addItem(toolsMenuItem)
 
+        let settingsMenuItem = NSMenuItem(title: "设置…", action: #selector(handleShowSettings), keyEquivalent: ",")
+        settingsMenuItem.target = self
+        menu.addItem(settingsMenuItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "退出", action: #selector(handleQuit), keyEquivalent: "q")
@@ -200,15 +205,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Session setup
 
-    private func setupSession(with config: AgentConfig) {
+    private func setupSession(with config: AgentConfig, autoStart: Bool = true) {
         let audio = MacAudioIO()
+        let selectedEngine = UserDefaults.standard.string(forKey: SettingsWindowController.ttsEngineKey)
         let tts = MacTts(audio: audio,
                          voiceLanguage: config.voice?.ttsVoice,
-                         ttsEngine: config.voice?.ttsEngine,
+                         ttsEngine: selectedEngine ?? config.voice?.ttsEngine,
                          edgePythonPath: config.voice?.edgePythonPath,
                          edgeVoiceZh: config.voice?.edgeVoiceZh,
                          edgeVoiceEn: config.voice?.edgeVoiceEn)
-        let stt = MacStt(locale: config.voice?.sttLocale ?? "zh-CN")
+        let stt = WhisperStt(inputSampleRate: audio.sampleRate)
         let vad = EnergyVad()
         let llm = makeProvider(from: config)
 
@@ -280,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         replayHistory(session.loadedHistory)
 
-        startListening()
+        if autoStart { startListening() }
     }
 
     private func replayHistory(_ history: [ChatMessage]) {
@@ -388,6 +394,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             controller = created
         }
         controller.show()
+    }
+
+    @objc private func handleShowSettings() {
+        let controller: SettingsWindowController
+        if let existing = settingsWindowController {
+            controller = existing
+        } else {
+            let created = SettingsWindowController()
+            created.onSave = { [weak self] in
+                self?.reloadSessionFromSettings()
+            }
+            settingsWindowController = created
+            controller = created
+        }
+        controller.show()
+    }
+
+    /// Destroys and rebuilds the session so new whisper language / TTS engine
+    /// apply; the rebuilt session reloads conversation history from disk.
+    private func reloadSessionFromSettings() {
+        guard let config = loadedConfig else { return }
+        let wasRunning = isRunning
+        if isRunning { stopListening() }
+        session = nil
+        appendLine("\n—— 已应用新设置，重建会话 ——")
+        setupSession(with: config, autoStart: wasRunning)
     }
 
     @objc private func handleQuit() {
