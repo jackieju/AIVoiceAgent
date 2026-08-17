@@ -57,6 +57,7 @@ export AIVOICEAGENT_API_KEY=你的key
 | `systemPrompt` | 系统提示词。样例里已写好「语音场景」提示（回复口语化、不用 markdown） |
 | `voice.ttsVoice` | 朗读语言/语音，如 `zh-CN` |
 | `voice.sttLocale` | 识别语言，如 `zh-CN` |
+| `voice.whisperPrompt` | whisper 识别提词，用于让专有名词（如 `OpenCode`）被正确转写。留空则用内置默认词表 |
 | `maxRounds` | 单次对话里工具调用的最大轮数上限，默认 5（防止工具回路无限循环） |
 | `mcpServers` | 外部 MCP 工具服务配置（见下文「工具系统」） |
 | `nvp.enabled` | 是否启用上下文压缩，`false` 则完全不调 NVP |

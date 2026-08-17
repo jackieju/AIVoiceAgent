@@ -32,6 +32,16 @@ public struct TranscriptCorrector {
              canonical: "OpenCode"),
     ]
 
+    /// Canonical terms (de-duplicated) to prime whisper's initial prompt; correction is the fallback.
+    public static func canonicalTerms(from rules: [Rule]) -> [String] {
+        var seen = Set<String>()
+        var terms: [String] = []
+        for rule in rules where seen.insert(rule.canonical).inserted {
+            terms.append(rule.canonical)
+        }
+        return terms
+    }
+
     public func correct(_ text: String) -> String {
         var result = text
         for (re, replacement) in compiled {

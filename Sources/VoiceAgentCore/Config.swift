@@ -28,6 +28,9 @@ public struct VoiceConfig: Codable {
     public var edgePythonPath: String?
     public var edgeVoiceZh: String?
     public var edgeVoiceEn: String?
+    /// whisper initial prompt to bias recognition of domain terms (e.g. "OpenCode, Claude").
+    /// If nil, WhisperStt falls back to terms from TranscriptCorrector.defaultRules.
+    public var whisperPrompt: String?
 }
 
 public struct NVPConfig: Codable {

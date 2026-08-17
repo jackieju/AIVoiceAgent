@@ -9,7 +9,8 @@
   "maxRounds": 5,
   "voice": {
     "ttsVoice": "zh-CN",
-    "sttLocale": "zh-CN"
+    "sttLocale": "zh-CN",
+    "whisperPrompt": "OpenCode, Claude, AIVoiceAgent"
   },
   "mcpServers": {
     "filesystem": {

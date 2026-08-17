@@ -55,16 +55,34 @@ final class WhisperStt: NSObject, Stt {
         "ggml-tiny.bin",
     ]
 
+    private let configuredPrompt: String?
+
     /// - Parameter inputSampleRate: the sample rate of buffers arriving via feed()
     ///   (MacAudioIO delivers hardware rate, typically 48000).
-    init(inputSampleRate: Double = 48_000) {
+    /// - Parameter initialPrompt: seeds whisper's `--prompt`; nil falls back to
+    ///   the canonical terms of TranscriptCorrector.defaultRules.
+    init(inputSampleRate: Double = 48_000, initialPrompt: String? = nil) {
         self.inputSampleRate = inputSampleRate
         self.maxAccumSamples = Int(inputSampleRate * 30)
         self.preRollCapacity = Int(inputSampleRate * 0.5)
+        self.configuredPrompt = initialPrompt
         super.init()
         let modelFound = Self.locateModel(dir: modelSearchDir, preferred: preferredModels) != nil
         let cliFound = FileManager.default.fileExists(atPath: whisperPath)
         vaLog("WhisperStt init inRate=\(inputSampleRate) cli=\(cliFound) model=\(modelFound)")
+    }
+
+    private func resolveInitialPrompt() -> String {
+        if let override = UserDefaults.standard.string(forKey: "whisperPrompt"),
+           !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return override
+        }
+        if let cfg = configuredPrompt,
+           !cfg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return cfg
+        }
+        return TranscriptCorrector.canonicalTerms(from: TranscriptCorrector.defaultRules)
+            .joined(separator: ", ")
     }
 
     var isActive: Bool {
@@ -181,13 +199,16 @@ final class WhisperStt: NSObject, Stt {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: whisperPath)
-        process.arguments = [
+        var args = [
             "-m", model.path,
             "-f", wavURL.path,
             "-l", langArg,
             "--no-timestamps",
             "-t", "4",
         ]
+        let prompt = resolveInitialPrompt()
+        if !prompt.isEmpty { args += ["--prompt", prompt] }
+        process.arguments = args
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
@@ -236,6 +257,14 @@ final class WhisperStt: NSObject, Stt {
             converter = AVAudioConverter(from: inFormat, to: outFormat)
             converter?.primeMethod = .none
             converterInRate = inputSampleRate
+        } else {
+            // A converter that received .endOfStream in a prior conversion is
+            // permanently terminated: every subsequent convert() returns 0 frames
+            // with error=nil, regardless of input. reset() clears the EOS/internal
+            // state so a cached converter can do the next one-shot resample. Without
+            // this, only the FIRST utterance transcribes; every post-barge-in one
+            // yields resampledSamples=0. (Verified by probe + Oracle bg_cbf08db4.)
+            converter?.reset()
         }
         guard let converter = converter else { return nil }
 

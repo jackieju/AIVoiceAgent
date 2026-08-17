@@ -214,7 +214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                          edgePythonPath: config.voice?.edgePythonPath,
                          edgeVoiceZh: config.voice?.edgeVoiceZh,
                          edgeVoiceEn: config.voice?.edgeVoiceEn)
-        let stt = WhisperStt(inputSampleRate: audio.sampleRate)
+        let stt = WhisperStt(inputSampleRate: audio.sampleRate,
+                             initialPrompt: config.voice?.whisperPrompt)
         let vad = EnergyVad()
         let llm = makeProvider(from: config)
 
