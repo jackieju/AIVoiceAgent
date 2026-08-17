@@ -20,6 +20,7 @@ public final class VoiceSession {
     private let nvp: NVPClient?
     private let agent: AgentLoop
     private let store: HistoryStore?
+    private let dtd = DoubleTalkDetector()
 
     public var onState: ((VoiceState) -> Void)?
     public var onUserText: ((String) -> Void)?
@@ -77,13 +78,30 @@ public final class VoiceSession {
 
     private func wire() {
         var bufCount = 0
-        audio.onBuffer = { [weak self] samples, _ in
+        audio.onBuffer = { [weak self] samples, time in
             guard let self = self else { return }
             let r = Self.rms(samples)
             bufCount += 1
             if bufCount % 20 == 0 { vaLog("buffer #\(bufCount) n=\(samples.count) rms=\(r)") }
-            self.vad.process(rms: r)
+            // While speaking, the energy VAD can't tell echo residue from a real
+            // interrupting voice, so route mic frames to the double-talk detector
+            // (gated by playback RMS) instead. Its noise floor is frozen (we stop
+            // feeding it) because playback echo would poison the adaptation.
+            if self.state == .speaking {
+                self.dtd.process(micRms: r, refRms: self.audio.currentPlaybackRms, now: time)
+            } else {
+                self.vad.process(rms: r)
+            }
             self.stt.feed(samples, sampleRate: self.audio.sampleRate)
+        }
+
+        dtd.onBargeIn = { [weak self] in
+            guard let self = self else { return }
+            self.controlQueue.async {
+                guard self.state == .speaking else { return }
+                vaLog("DTD confirmed barge-in")
+                self.bargeIn()
+            }
         }
 
         stt.onPartial = { [weak self] text in
@@ -106,9 +124,7 @@ public final class VoiceSession {
             guard let self = self else { return }
             self.controlQueue.async {
                 vaLog("VAD speechStart state=\(self.state.rawValue)")
-                if self.state == .speaking {
-                    self.bargeIn()
-                } else if self.state == .listening {
+                if self.state == .listening {
                     self.stt.start()
                 }
             }
@@ -233,6 +249,7 @@ public final class VoiceSession {
 
     private func speakChunk(_ text: String, generation: Int) {
         guard generation == replyGeneration else { return }
+        if state != .speaking { dtd.arm() }
         state = .speaking
         tts.speak(text)
     }
@@ -240,8 +257,10 @@ public final class VoiceSession {
     private func bargeIn() {
         replyGeneration += 1
         pendingReply = ""
+        dtd.disarm()
         tts.stopImmediately()
         stt.reset()
+        vad.reset()
         state = .listening
         stt.start()
     }

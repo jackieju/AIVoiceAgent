@@ -20,8 +20,15 @@ public func vaLog(_ msg: String) {    let line = "[\(Date().timeIntervalSince197
 public protocol AudioIO: AnyObject {
     var onBuffer: (([Float], Double) -> Void)? { get set }
     var sampleRate: Double { get }
+    /// RMS of the TTS we are currently playing, for AEC double-talk detection.
+    /// 0 when not playing. Non-playing implementations may leave the default.
+    var currentPlaybackRms: Float { get }
     func start() throws
     func stop()
+}
+
+public extension AudioIO {
+    var currentPlaybackRms: Float { 0 }
 }
 
 public protocol Stt: AnyObject {
@@ -45,4 +52,5 @@ public protocol Vad: AnyObject {
     var onSpeechStart: (() -> Void)? { get set }
     var onSpeechEnd: (() -> Void)? { get set }
     func process(rms: Float)
+    func reset()
 }
