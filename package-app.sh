@@ -40,10 +40,18 @@ PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 13.0" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string AIVoiceAgent 需要麦克风来听你说话。" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string AIVoiceAgent 需要语音识别把你的话转成文字。" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :NSScreenCaptureUsageDescription string AIVoiceAgent 需要录屏权限来截图并理解你的屏幕内容。" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :LSUIElement bool false" "$PLIST"
 
-echo "==> ad-hoc 签名（TCC 权限归属靠稳定签名）"
-codesign --force --deep --sign - "$APP"
+echo "==> 固定证书签名（cdhash 稳定，TCC 授权一次后永久保持，不再反复弹权限框）"
+SIGN_IDENTITY="${AIVOICEAGENT_SIGN_IDENTITY:-Apple Development: WEIHUA JU (E2JD46H66A)}"
+if security find-identity -v -p codesigning | grep -qF "$SIGN_IDENTITY"; then
+  codesign --force --deep --options runtime --sign "$SIGN_IDENTITY" "$APP"
+  echo "    已用固定证书签名: $SIGN_IDENTITY"
+else
+  echo "    ⚠️  找不到证书「$SIGN_IDENTITY」，降级 ad-hoc（权限会反复失效！）"
+  codesign --force --deep --sign - "$APP"
+fi
 
 echo "==> 完成: $APP"
 echo "    双击运行，或: open '$APP'"
