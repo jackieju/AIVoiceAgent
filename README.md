@@ -190,6 +190,43 @@ bun run build   # 产出 dist/nvp-server
 - `[🛠️ 执行中…]` 正在调用工具
 - `[🔊 说话中…]` 正在朗读回复
 
+## Web Dashboard（浏览器语音对话）
+
+除命令行 macOS app 外，还提供一个浏览器端 Dashboard，跑一个本地 HTTP/WebSocket server（默认 `127.0.0.1:8765`），与 macOS app 共享同一份对话历史（`HistoryStore`）和同一套工具/AgentLoop。
+
+```bash
+.build/release/VoiceAgentWeb
+# 或指定配置 / 端口：
+.build/release/VoiceAgentWeb --config /path/to/config.json --port 8765
+```
+
+浏览器打开 `http://127.0.0.1:8765`（推荐 Chrome）。页面右上角 `select` 切换两条语音线路：
+
+### 路线 A：文字 / Web Speech（默认，零额外配置）
+
+用浏览器原生 Web Speech API 做语音识别与朗读，走后端现有的文本 `AgentLoop`。也可直接在输入框打字。识别→提交→流式回复→朗读一条龙，说话时暂停识别防自激。这条线路不依赖 OpenAI Realtime，任何 provider 都能用。
+
+### 路线 B：实时语音（OpenAI Realtime，需配 `realtime`）
+
+浏览器用后端签发的 **ephemeral client_secret** 直连 OpenAI Realtime，走 WebRTC 收发音频，延迟接近电话。模型充当「语音接待员」，凡是需要工具、实时信息、文件/代码操作、深度推理的问题，它会调用 `ask_agent` 把诉求委托回后端的文本 `AgentLoop`（拥有完整工具集），拿到结果再用语音转述——**工具、历史、上下文压缩全部零改动复用路线 A 的地基**。
+
+数据流：
+
+1. 浏览器 `POST /realtime/session` → 后端用真 `apiKey` 调 OpenAI `/v1/realtime/sessions` 签发 ephemeral（已配好 `ask_agent`/`hang_up` 工具与接待员 instructions），返回 `client_secret` + `sdp_url`。
+2. 浏览器用 ephemeral 与 OpenAI 做 WebRTC SDP 协商，音频直连，后端不碰音频流。
+3. 模型触发 `function_call` → 浏览器经 `/ws-realtime-control` 转给后端 `RealtimeBridgeSession` → 跑一次无状态 `AgentLoop` → 结果回写浏览器 → 浏览器包成 `function_call_output` + `response.create` 回喂 OpenAI，让接待员说出来。
+4. 模型调 `hang_up` 即结束通话。
+
+`config.json` 的 `realtime` 字段（**为空则路线 B 整体禁用**，两个 realtime 路由不挂载）：
+
+| 字段 | 说明 |
+|---|---|
+| `model` | Realtime 模型名，如 `gpt-4o-realtime-preview` |
+| `apiKey` | OpenAI key，支持 `{env:OPENAI_API_KEY}` 注入；仅后端持有，浏览器只拿短期 ephemeral |
+| `baseURL` | 可选，默认 `https://api.openai.com` |
+| `voice` | 可选，Realtime 语音音色，如 `alloy` |
+| `instructions` | 可选，接待员系统提示；为 `null` 用内置默认（约束「自己答不了就调 `ask_agent`」） |
+
 ## 架构
 
 分两层，为将来跨平台预留：

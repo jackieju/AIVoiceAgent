@@ -2,7 +2,10 @@ import Foundation
 
 /// Anthropic-native content shape; OpenAICompatibleProvider translates to/from
 /// this internally so upper layers stay uniform.
-public enum ContentBlock {
+///
+/// `@unchecked Sendable`: `toolUse.input` is `[String: Any]` (not auto-Sendable),
+/// but every case stores immutable values only — safe to hand across actors.
+public enum ContentBlock: @unchecked Sendable {
     case text(String)
     case toolUse(id: String, name: String, input: [String: Any])
     /// `imageBase64` (PNG, no data: prefix) lets a tool return a screenshot the
@@ -142,7 +145,7 @@ public typealias ToolAuthorizer = (_ toolName: String, _ description: String) as
 /// Holds built-in and MCP-provided tools, keyed by the name sent to the model.
 /// Thread-safe: MCP tools may be registered from a background task after the
 /// session has already started reading `specs` / calling `execute`.
-public final class ToolRegistry {
+public final class ToolRegistry: @unchecked Sendable {
     private var tools: [String: Tool] = [:]
     private let lock = NSLock()
     private var authorizer: ToolAuthorizer?

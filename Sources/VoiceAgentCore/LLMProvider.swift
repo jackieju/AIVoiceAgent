@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ChatMessage: Codable {
+public struct ChatMessage: Codable, @unchecked Sendable {
     public enum Role: String, Codable { case user, assistant }
     public let role: Role
     public let content: [ContentBlock]

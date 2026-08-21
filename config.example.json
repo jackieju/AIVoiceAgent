@@ -29,5 +29,12 @@
     "username": "opencode",
     "password": "{env:OPENCODE_SERVER_PASSWORD}",
     "defaultSessionID": ""
+  },
+  "realtime": {
+    "model": "gpt-4o-realtime-preview",
+    "apiKey": "{env:OPENAI_API_KEY}",
+    "baseURL": "https://api.openai.com",
+    "voice": "alloy",
+    "instructions": null
   }
 }

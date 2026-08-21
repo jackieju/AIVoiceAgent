@@ -3,7 +3,7 @@ import Foundation
 /// Persists conversation history to a JSON file so context survives restarts.
 /// All read/write failures are swallowed and degrade to an empty history —
 /// losing a snapshot must never interrupt the conversation.
-public final class HistoryStore {
+public final class HistoryStore: @unchecked Sendable {
     private let fileURL: URL
     private let queue = DispatchQueue(label: "voiceagent.history.store")
 

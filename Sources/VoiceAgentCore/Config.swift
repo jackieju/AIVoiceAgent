@@ -14,13 +14,13 @@ public enum ConfigError: Error, CustomStringConvertible {
     }
 }
 
-public struct ProviderConfig: Codable {
+public struct ProviderConfig: Codable, Sendable {
     public var type: String
     public var baseURL: String?
     public var apiKey: String
 }
 
-public struct VoiceConfig: Codable {
+public struct VoiceConfig: Codable, Sendable {
     public var ttsVoice: String?
     public var sttLocale: String?
     /// "edge" (Microsoft neural, needs edgePythonPath) or "system" (AVSpeechSynthesizer, offline).
@@ -33,20 +33,32 @@ public struct VoiceConfig: Codable {
     public var whisperPrompt: String?
 }
 
-public struct NVPConfig: Codable {
+public struct NVPConfig: Codable, Sendable {
     public var enabled: Bool?
     public var binaryPath: String?
     public var dbPath: String?
     public var projectId: String?
 }
 
-public struct MCPServerConfigJSON: Codable {
+public struct MCPServerConfigJSON: Codable, Sendable {
     public var command: String
     public var args: [String]?
     public var env: [String: String]?
 }
 
-public struct OpenCodeConfig: Codable {
+/// 路线B（OpenAI Realtime）配置。为 nil 时该路线整体禁用。
+public struct RealtimeConfig: Codable, Sendable {
+    public var model: String
+    /// 支持 "{env:OPENAI_API_KEY}" 注入。
+    public var apiKey: String
+    /// 默认 https://api.openai.com。
+    public var baseURL: String?
+    public var voice: String?
+    /// nil 时用内置桥接接待员提示。
+    public var instructions: String?
+}
+
+public struct OpenCodeConfig: Codable, Sendable {
     /// e.g. "http://127.0.0.1:4096"
     public var baseURL: String
     /// HTTP Basic username; OpenCode server defaults to "opencode".
@@ -56,7 +68,7 @@ public struct OpenCodeConfig: Codable {
     public var defaultSessionID: String?
 }
 
-public struct AgentConfig: Codable {
+public struct AgentConfig: Codable, Sendable {
     public var model: String
     public var provider: ProviderConfig
     public var systemPrompt: String?
@@ -65,6 +77,7 @@ public struct AgentConfig: Codable {
     public var maxRounds: Int?
     public var mcpServers: [String: MCPServerConfigJSON]?
     public var opencode: OpenCodeConfig?
+    public var realtime: RealtimeConfig?
 
     public static func load(from path: String) throws -> AgentConfig {
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)

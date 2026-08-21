@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Voice Agent</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262a33;
+    --text: #e6e8eb;
+    --muted: #8b909a;
+    --user: #2563eb;
+    --agent: #1f2530;
+    --accent: #10b981;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header h1 { font-size: 16px; font-weight: 600; }
+  #status {
+    font-size: 13px;
+    color: var(--muted);
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+  }
+  #status.thinking { color: #fbbf24; border-color: #fbbf24; }
+  #status.working { color: #60a5fa; border-color: #60a5fa; }
+  #status.speaking { color: var(--accent); border-color: var(--accent); }
+  #status.idle { color: var(--muted); }
+  #log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--user); }
+  .msg.agent { align-self: flex-start; background: var(--agent); border: 1px solid var(--border); }
+  .msg.tool { align-self: flex-start; background: transparent; color: var(--muted); font-size: 13px; padding: 2px 14px; }
+  footer {
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 10px;
+  }
+  #input {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    padding: 12px 14px;
+    font: inherit;
+    resize: none;
+  }
+  #input:focus { outline: none; border-color: var(--user); }
+  button {
+    background: var(--user);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 0 20px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #abort { background: #dc2626; }
+  #mic { background: var(--panel); border: 1px solid var(--border); font-size: 18px; padding: 0 16px; }
+  #mic.on { background: var(--accent); border-color: var(--accent); }
+  #mic.listening { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,.5); } 50% { box-shadow: 0 0 0 6px rgba(16,185,129,0); } }
+  #interim { align-self: flex-end; color: var(--muted); font-size: 13px; font-style: italic; padding: 2px 14px; }
+  #voiceHint { font-size: 12px; color: var(--muted); margin-left: auto; }
+  #engine { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 13px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>AI Voice Agent</h1>
+    <span id="status" class="idle">连接中…</span>
+    <select id="engine" title="对话引擎">
+      <option value="text">文字 / Web Speech</option>
+      <option value="realtime">实时语音 (Realtime)</option>
+    </select>
+    <span id="voiceHint"></span>
+  </header>
+  <div id="log"></div>
+  <footer>
+    <button id="mic" title="语音对话">🎤</button>
+    <textarea id="input" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行…"></textarea>
+    <button id="send" disabled>发送</button>
+    <button id="abort" style="display:none">停止</button>
+  </footer>
+<script>
+const log = document.getElementById("log");
+const input = document.getElementById("input");
+const sendBtn = document.getElementById("send");
+const abortBtn = document.getElementById("abort");
+const statusEl = document.getElementById("status");
+const micBtn = document.getElementById("mic");
+const voiceHint = document.getElementById("voiceHint");
+
+let ws = null;
+let agentBubble = null;
+
+// ---- 语音层（路线 A：浏览器原生 Web Speech API）----
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let voiceOn = false;        // 语音模式总开关
+let shouldListen = false;   // 是否应保持识别（用于 onend 自愈重启）
+let botSpeaking = false;    // TTS 播放中 → 暂停识别，防自激
+let pendingSpeak = "";      // 累积流式回复文本，done 时朗读
+let interimEl = null;       // 实时识别中间结果气泡
+let zhVoice = null;
+
+async function getVoicesReady() {
+  const v = speechSynthesis.getVoices();
+  if (v.length) return v;
+  return new Promise((r) => { speechSynthesis.onvoiceschanged = () => r(speechSynthesis.getVoices()); });
+}
+
+async function pickVoice() {
+  const voices = await getVoicesReady();
+  zhVoice = voices.find((v) => v.lang === "zh-CN" && v.localService)
+         || voices.find((v) => v.lang && v.lang.startsWith("zh"))
+         || null;
+}
+
+function setVoiceHint(t) { voiceHint.textContent = t; }
+
+function botSay(text) {
+  const clean = (text || "").trim();
+  if (!clean || !voiceOn) return;
+  botSpeaking = true;
+  try { recognition && recognition.stop(); } catch {}
+  const u = new SpeechSynthesisUtterance(clean);
+  if (zhVoice) u.voice = zhVoice;
+  u.lang = "zh-CN";
+  u.rate = 1.0;
+  const resume = () => {
+    setTimeout(() => {                    // 300ms 冷却，让外放残响过去
+      botSpeaking = false;
+      if (voiceOn && shouldListen) { try { recognition.start(); } catch {} }
+    }, 300);
+  };
+  u.onend = resume;
+  u.onerror = resume;                     // TTS 崩了也必须恢复识别
+  speechSynthesis.speak(u);
+}
+
+function buildRecognition() {
+  const r = new SR();
+  r.continuous = true;
+  r.interimResults = true;
+  r.lang = "zh-CN";
+  r.onresult = (e) => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const res = e.results[i];
+      const t = res[0].transcript;
+      if (res.isFinal) {
+        const finalText = t.trim();
+        if (interimEl) { interimEl.remove(); interimEl = null; }
+        if (finalText) voiceSend(finalText);
+      } else {
+        interim += t;
+      }
+    }
+    if (interim.trim()) {
+      if (!interimEl) { interimEl = document.createElement("div"); interimEl.id = "interim"; log.appendChild(interimEl); }
+      interimEl.textContent = "🎙 " + interim.trim();
+      log.scrollTop = log.scrollHeight;
+    }
+  };
+  r.onerror = (e) => {
+    if (e.error === "no-speech" || e.error === "aborted") return;   // 正常，不报警
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      setVoiceHint("麦克风被拒绝");
+      stopVoice();
+    }
+  };
+  r.onend = () => {
+    if (voiceOn && shouldListen && !botSpeaking) {
+      setTimeout(() => { try { recognition.start(); } catch {} }, 300);   // 自愈重启（Chrome 60s 切段 / no-speech 超时）
+    }
+  };
+  return r;
+}
+
+function voiceSend(text) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  addBubble("user", text);
+  ws.send(JSON.stringify({ type: "chat.send", text }));
+  pendingSpeak = "";
+  agentBubble = null;
+}
+
+async function startVoice() {
+  if (!SR) { setVoiceHint("浏览器不支持语音（建议用 Chrome）"); return; }
+  await pickVoice();
+  voiceOn = true;
+  shouldListen = true;
+  recognition = buildRecognition();
+  micBtn.classList.add("on", "listening");
+  setVoiceHint(zhVoice ? ("语音已开 · " + zhVoice.name) : "语音已开");
+  try { recognition.start(); } catch {}
+}
+
+function stopVoice() {
+  voiceOn = false;
+  shouldListen = false;
+  micBtn.classList.remove("on", "listening");
+  setVoiceHint("");
+  try { recognition && recognition.stop(); } catch {}
+  speechSynthesis.cancel();
+  if (interimEl) { interimEl.remove(); interimEl = null; }
+}
+
+micBtn.onclick = () => {
+  if (engineSel.value === "realtime") {
+    if (rtcOn) stopRealtime(); else startRealtime();
+  } else {
+    if (voiceOn) stopVoice(); else startVoice();
+  }
+};
+
+const engineSel = document.getElementById("engine");
+engineSel.onchange = () => {
+  if (voiceOn) stopVoice();
+  if (rtcOn) stopRealtime();
+  setVoiceHint("");
+};
+
+// ---- 语音层（路线 B：OpenAI Realtime，浏览器 WebRTC 直连）----
+let rtcOn = false;
+let pc = null;
+let dc = null;
+let controlWs = null;
+let localStream = null;
+let remoteAudioEl = null;
+const argBuffers = {};   // call_id -> 累积的 function_call_arguments（防 done 事件缺 arguments）
+
+function rtcCleanup() {
+  rtcOn = false;
+  micBtn.classList.remove("on", "listening");
+  try { dc && dc.close(); } catch {}
+  try { pc && pc.close(); } catch {}
+  try { controlWs && controlWs.close(); } catch {}
+  try { localStream && localStream.getTracks().forEach((t) => t.stop()); } catch {}
+  try { remoteAudioEl && remoteAudioEl.remove(); } catch {}
+  dc = null; pc = null; controlWs = null; localStream = null; remoteAudioEl = null;
+  for (const k in argBuffers) delete argBuffers[k];
+}
+
+function stopRealtime() {
+  rtcCleanup();
+  setVoiceHint("");
+  setStatus("idle");
+}
+
+async function startRealtime() {
+  setVoiceHint("正在建立实时会话…");
+  let sess;
+  try {
+    const r = await fetch("/realtime/session", { method: "POST" });
+    if (!r.ok) { setVoiceHint("会话签发失败（后端未配置 realtime？）"); return; }
+    sess = await r.json();
+  } catch { setVoiceHint("无法连接后端"); return; }
+
+  const ephemeral = sess.client_secret && sess.client_secret.value;
+  const sdpUrl = sess.sdp_url;
+  if (!ephemeral || !sdpUrl) { setVoiceHint("会话响应缺 client_secret / sdp_url"); return; }
+
+  controlWs = new WebSocket(`ws://${location.host}/ws-realtime-control`);
+  controlWs.onmessage = (e) => {
+    let m; try { m = JSON.parse(e.data); } catch { return; }
+    if (m.type === "tool_reply") feedToolOutput(m.call_id, m.output);
+  };
+
+  try {
+    pc = new RTCPeerConnection();
+
+    remoteAudioEl = document.createElement("audio");
+    remoteAudioEl.autoplay = true;
+    pc.ontrack = (e) => { remoteAudioEl.srcObject = e.streams[0]; };
+
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    pc.addTrack(localStream.getTracks()[0], localStream);
+
+    dc = pc.createDataChannel("oai-events");
+    dc.onmessage = onRealtimeEvent;
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    const sdpResp = await fetch(sdpUrl, {
+      method: "POST",
+      body: offer.sdp,
+      headers: { Authorization: `Bearer ${ephemeral}`, "Content-Type": "application/sdp" },
+    });
+    if (!sdpResp.ok) { setVoiceHint("SDP 协商失败 (" + sdpResp.status + ")"); rtcCleanup(); return; }
+    await pc.setRemoteDescription({ type: "answer", sdp: await sdpResp.text() });
+
+    rtcOn = true;
+    micBtn.classList.add("on", "listening");
+    setVoiceHint("实时语音已开 · 直接说话");
+    setStatus("idle");
+  } catch (err) {
+    setVoiceHint("实时会话建立失败：" + err);
+    rtcCleanup();
+  }
+}
+
+function onRealtimeEvent(e) {
+  let evt; try { evt = JSON.parse(e.data); } catch { return; }
+  switch (evt.type) {
+    case "response.function_call_arguments.delta":
+      if (evt.call_id) argBuffers[evt.call_id] = (argBuffers[evt.call_id] || "") + (evt.delta || "");
+      break;
+    case "response.function_call_arguments.done": {
+      const callId = evt.call_id;
+      const name = evt.name || "";
+      const args = evt.arguments || argBuffers[callId] || "{}";
+      delete argBuffers[callId];
+      if (name === "hang_up") { addBubble("tool", "📞 通话结束"); stopRealtime(); break; }
+      addBubble("tool", "🛠️ " + name);
+      if (controlWs && controlWs.readyState === WebSocket.OPEN) {
+        controlWs.send(JSON.stringify({ type: "function_call", call_id: callId, name, arguments: args }));
+      }
+      break;
+    }
+    case "response.audio_transcript.done":
+      if (evt.transcript) addBubble("agent", evt.transcript);
+      break;
+    case "conversation.item.input_audio_transcription.completed":
+      if (evt.transcript) addBubble("user", evt.transcript);
+      break;
+  }
+}
+
+function feedToolOutput(callId, output) {
+  if (!dc || dc.readyState !== "open") return;
+  dc.send(JSON.stringify({
+    type: "conversation.item.create",
+    item: { type: "function_call_output", call_id: callId, output: output },
+  }));
+  dc.send(JSON.stringify({ type: "response.create" }));
+}
+
+function setStatus(s) {
+  statusEl.className = s;
+  const labels = { idle: "空闲", thinking: "思考中…", working: "调用工具…", speaking: "说话中…" };
+  statusEl.textContent = labels[s] || s;
+  const busy = (s === "thinking" || s === "working" || s === "speaking");
+  abortBtn.style.display = busy ? "" : "none";
+  sendBtn.disabled = busy || !ws || ws.readyState !== WebSocket.OPEN;
+}
+
+function addBubble(cls, text) {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { setStatus("idle"); sendBtn.disabled = false; };
+  ws.onclose = () => { setStatus("idle"); statusEl.textContent = "已断开"; sendBtn.disabled = true; setTimeout(connect, 1500); };
+  ws.onerror = () => { statusEl.textContent = "连接错误"; };
+  ws.onmessage = (e) => {
+    let f; try { f = JSON.parse(e.data); } catch { return; }
+    switch (f.type) {
+      case "history":
+        addBubble(f.role === "user" ? "user" : "agent", f.text);
+        break;
+      case "state":
+        setStatus(f.state);
+        if (f.state === "idle") agentBubble = null;
+        break;
+      case "text_delta":
+        if (!agentBubble) agentBubble = addBubble("agent", "");
+        agentBubble.textContent += f.text;
+        if (voiceOn) pendingSpeak += f.text;
+        log.scrollTop = log.scrollHeight;
+        break;
+      case "tool_start":
+        addBubble("tool", "🛠️ " + f.name);
+        agentBubble = null;
+        break;
+      case "assistant_message":
+        if (!agentBubble) addBubble("agent", f.text);
+        if (voiceOn) pendingSpeak += f.text;
+        agentBubble = null;
+        break;
+      case "error":
+        addBubble("tool", "⚠️ " + f.message);
+        break;
+      case "done":
+        agentBubble = null;
+        if (voiceOn && pendingSpeak.trim()) { const t = pendingSpeak; pendingSpeak = ""; botSay(t); }
+        break;
+    }
+  };
+}
+
+function send() {
+  const text = input.value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+  addBubble("user", text);
+  ws.send(JSON.stringify({ type: "chat.send", text }));
+  input.value = "";
+  input.style.height = "auto";
+  agentBubble = null;
+}
+
+sendBtn.onclick = send;
+abortBtn.onclick = () => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "abort" })); };
+input.onkeydown = (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+};
+input.oninput = () => { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; };
+
+connect();
+</script>
+</body>
+</html>

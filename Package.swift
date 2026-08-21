@@ -4,6 +4,9 @@ import PackageDescription
 let package = Package(
     name: "AIVoiceAgent",
     platforms: [.macOS(.v13)],
+    dependencies: [
+        .package(url: "https://github.com/swhitty/FlyingFox.git", .upToNextMajor(from: "0.27.1")),
+    ],
     targets: [
         .target(
             name: "VoiceAgentCore",
@@ -18,6 +21,17 @@ let package = Package(
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("Speech"),
                 .linkedFramework("Carbon"),
+            ]
+        ),
+        .executableTarget(
+            name: "VoiceAgentWeb",
+            dependencies: [
+                "VoiceAgentCore",
+                .product(name: "FlyingFox", package: "FlyingFox"),
+            ],
+            path: "Sources/VoiceAgentWeb",
+            resources: [
+                .copy("Public"),
             ]
         ),
         .testTarget(
