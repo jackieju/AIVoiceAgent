@@ -28,7 +28,12 @@
     "baseURL": "http://127.0.0.1:4096",
     "username": "opencode",
     "password": "{env:OPENCODE_SERVER_PASSWORD}",
-    "defaultSessionID": ""
+    "defaultSessionID": "",
+    "autoStart": true,
+    "binary": "opencode",
+    "port": 4096,
+    "directory": "",
+    "startTimeoutMs": 15000
   },
   "realtime": {
     "model": "gpt-4o-realtime-preview",

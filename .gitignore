@@ -5,3 +5,4 @@
 Probe.app/
 dist/
 .playwright-mcp/
+node_modules/

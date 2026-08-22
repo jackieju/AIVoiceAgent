@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIVoiceAgent</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "PingFang SC", system-ui, sans-serif;
+    background: #0f1115; color: #e6e8eb; display: flex; flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    padding: 14px 18px; border-bottom: 1px solid #222630;
+    display: flex; align-items: center; gap: 12px;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  #mode {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    background: #1a1f2b; color: #8b95a7; border: 1px solid #2a3140;
+  }
+  #status { font-size: 12px; color: #6b7688; margin-left: auto; }
+  #log {
+    flex: 1; overflow-y: auto; padding: 18px; display: flex;
+    flex-direction: column; gap: 12px;
+  }
+  .msg { max-width: 78%; padding: 10px 14px; border-radius: 14px; line-height: 1.5; font-size: 15px; white-space: pre-wrap; }
+  .user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
+  .agent { align-self: flex-start; background: #1a1f2b; border: 1px solid #2a3140; border-bottom-left-radius: 4px; }
+  .partial { align-self: flex-end; background: transparent; color: #8b95a7; border: 1px dashed #3a4252; }
+  footer { padding: 16px; border-top: 1px solid #222630; display: flex; justify-content: center; }
+  #mic {
+    width: 72px; height: 72px; border-radius: 50%; border: none; cursor: pointer;
+    font-size: 30px; background: #2563eb; color: #fff; transition: all .15s;
+  }
+  #mic.listening { background: #dc2626; animation: pulse 1.4s infinite; }
+  #mic.speaking { background: #7c3aed; }
+  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.08)} }
+  .hint { text-align: center; font-size: 12px; color: #6b7688; padding: 0 16px 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AIVoiceAgent</h1>
+  <span id="mode">main</span>
+  <span id="status">未连接</span>
+</header>
+<div id="log"></div>
+<div class="hint" id="hint">点麦克风开始 · 说“打开 OpenCode”接入 · 说“退出”回主控</div>
+<footer>
+  <button id="mic" title="开始/停止">🎤</button>
+</footer>
+
+<script>
+const logEl = document.getElementById("log");
+const modeEl = document.getElementById("mode");
+const statusEl = document.getElementById("status");
+const micBtn = document.getElementById("mic");
+
+let ws, recog, listening = false, speaking = false;
+let partialEl = null;
+
+function addMsg(text, cls) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  d.textContent = text;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+  return d;
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}`);
+  ws.onopen = () => { statusEl.textContent = "已连接"; ws.send(JSON.stringify({ type: "hello", shell: "browser" })); };
+  ws.onclose = () => { statusEl.textContent = "断开，重连中…"; setTimeout(connect, 1500); };
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "speak") { addMsg(m.text, "agent"); speakOut(m.text); }
+    else if (m.type === "mode") { modeEl.textContent = m.stack.join(" › "); }
+    else if (m.type === "stop_speak") { window.speechSynthesis.cancel(); }
+  };
+}
+
+function setupRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { statusEl.textContent = "浏览器不支持语音识别（请用 Chrome）"; return; }
+  recog = new SR();
+  recog.lang = "zh-CN";
+  recog.continuous = true;
+  recog.interimResults = true;
+
+  recog.onresult = (ev) => {
+    if (speaking) return;
+    let interim = "";
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const r = ev.results[i];
+      if (r.isFinal) {
+        const text = r[0].transcript.trim();
+        if (partialEl) { partialEl.remove(); partialEl = null; }
+        if (text) { addMsg(text, "user"); ws.send(JSON.stringify({ type: "utterance", text })); }
+      } else {
+        interim += r[0].transcript;
+      }
+    }
+    if (interim) {
+      if (!partialEl) partialEl = addMsg("", "partial");
+      partialEl.textContent = interim;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  };
+  recog.onend = () => { if (listening) recog.start(); };
+  recog.onerror = (e) => { if (e.error === "not-allowed") statusEl.textContent = "麦克风被拒绝"; };
+}
+
+function speakOut(text) {
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "zh-CN";
+  u.onstart = () => { speaking = true; micBtn.classList.add("speaking"); micBtn.classList.remove("listening"); };
+  u.onend = () => {
+    speaking = false;
+    micBtn.classList.remove("speaking");
+    if (listening) { micBtn.classList.add("listening"); setTimeout(() => {}, 300); }
+  };
+  window.speechSynthesis.speak(u);
+}
+
+function start() {
+  if (!recog) setupRecognition();
+  if (!recog) return;
+  listening = true;
+  recog.start();
+  micBtn.classList.add("listening");
+  micBtn.textContent = "⏹";
+}
+function stop() {
+  listening = false;
+  if (recog) recog.stop();
+  window.speechSynthesis.cancel();
+  micBtn.classList.remove("listening", "speaking");
+  micBtn.textContent = "🎤";
+}
+
+micBtn.onclick = () => (listening ? stop() : start());
+connect();
+</script>
+</body>
+</html>

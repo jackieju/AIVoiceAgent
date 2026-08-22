@@ -1,0 +1,13 @@
+{
+  "name": "aivoiceagent-brain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AIVoiceAgent 跨平台语音核心 (Node)。WebSocket server + 意图路由 + opencode 转发 + LLM 对话。外壳(浏览器/Swift/微信)经 WebSocket 接入。",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
